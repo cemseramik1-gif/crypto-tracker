@@ -22,7 +22,6 @@ INITIAL_CONFIG = [
     {"id": 2, "name": "Kraken API (Stable Time)", "url": f"{KRAKEN_API_URL}/0/public/Time", "status": "Pending", "last_check": None, "last_result": ""},
     # 3. Kraken API Live Data Check - Monitoring the specific endpoint we use for the dashboard
     {"id": 3, "name": "Kraken API (Live Ticker)", "url": KRAKEN_TICKER_ENDPOINT, "status": "Pending", "last_check": None, "last_result": ""},
-    # Removed all Binance and Mock Data feeds.
 ]
 
 
@@ -55,11 +54,21 @@ def fetch_btc_data():
             st.error(f"Kraken API reported an error: {error_msg}")
             return None, None, None
 
-        # Kraken returns data in 'result' key, with XBTUSD as the key for Bitcoin
-        btc_data = data['result'].get('XBTUSD')
-        if not btc_data:
-            st.error("Kraken response did not contain BTCUSD (XBTUSD) data.")
+        # FIX: Dynamically determine the pair key instead of hardcoding 'XBTUSD'
+        # Kraken returns data in 'result' key, which is a dict containing the pair key (e.g., XBTUSD or XXBTZUSD)
+        result_pairs = data.get('result')
+        if not result_pairs:
+            st.error("Kraken response 'result' field was empty.")
             return None, None, None
+        
+        # Get the first (and usually only) pair key in the result dictionary
+        pair_key = next(iter(result_pairs), None)
+
+        if not pair_key:
+            st.error("Kraken response 'result' field contained no market data.")
+            return None, None, None
+
+        btc_data = result_pairs.get(pair_key)
         
         # Extract required fields for TA preparation (Kraken structure is: [price, volume, high, low...])
         # 'c' is the last trade price [0]
