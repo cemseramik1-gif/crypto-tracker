@@ -8,16 +8,26 @@ from datetime import datetime
 # --- Configuration and Constants ---
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 1
-# Note: The 'Blockchain (BTC BlockCypher)' is the free blockchain data API check.
+
+# Using the most stable Binance endpoint for live data fetching
+BINANCE_API_URL = "https://api.binance.com"
+
+# The INITIAL_CONFIG list for the health check section (Section 1)
 INITIAL_CONFIG = [
+    # 1. Critical free blockchain data API (BlockCypher)
     {"id": 1, "name": "Blockchain (BTC BlockCypher)", "url": "https://api.blockcypher.com/v1/btc/main", "status": "Pending", "last_check": None, "last_result": ""},
-    {"id": 2, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
-    {"id": 3, "name": "Custom Feed Example (Good)", "url": "https://httpstat.us/200", "status": "Pending", "last_check": None, "last_result": ""},
+    # 2. Stable Binance API endpoint check
+    {"id": 2, "name": "Binance API (Stable)", "url": f"{BINANCE_API_URL}/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
+    # 3. Mock data feed example for general system health check
+    {"id": 3, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
 ]
+# NOTE: To use a faster endpoint (e.g., api1), change BINANCE_API_URL above:
+# BINANCE_API_URL = "https://api1.binance.com"
+
 
 # Configure the Streamlit page layout and title
 st.set_page_config(
-    page_title="Bitcoin & Data Feed Monitoring Dashboard",
+    page_title="Bitcoin TA Prep & Feed Monitor",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -28,20 +38,26 @@ if 'api_configs' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Time', 'Feed', 'Status', 'Response Time (ms)'])
 
-# --- New: Bitcoin Price Fetcher ---
+# --- New: Bitcoin Data Fetcher (Binance 24hr Ticker) ---
 
-@st.cache_data(ttl=60) # Cache price data for 60 seconds to avoid hitting API limits
-def fetch_btc_price():
-    """Fetches live Bitcoin price from CoinGecko's public API."""
-    # Using the simple price endpoint for only Bitcoin
-    price_url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
+@st.cache_data(ttl=15) # Cache price data for 15 seconds to be closer to "live"
+def fetch_btc_data():
+    """Fetches live Bitcoin price, 24h volume, and 24h change from Binance public API."""
+    ticker_url = f"{BINANCE_API_URL}/api/v3/ticker/24hr?symbol=BTCUSDT"
     try:
-        response = requests.get(price_url, timeout=5)
+        response = requests.get(ticker_url, timeout=5)
         response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
-        return response.json()
+        data = response.json()
+        
+        # Extract required fields for TA preparation
+        price = float(data.get('lastPrice', 0))
+        volume = float(data.get('volume', 0))
+        change_percent = float(data.get('priceChangePercent', 0))
+        
+        return price, volume, change_percent
     except Exception as e:
-        st.error(f"Could not fetch live Bitcoin price: {e}")
-        return None
+        st.error(f"Could not fetch live Bitcoin data from Binance: {e}")
+        return None, None, None
 
 # --- Existing Core Logic: API Check with Exponential Backoff ---
 
@@ -96,6 +112,13 @@ def check_single_api(url, attempt=0):
         result_detail = str(e)
         return status, result_detail, -1, {"error": result_detail}
     except json.JSONDecodeError:
+        # Binance /api/v3/ping returns an empty dictionary, which json.JSONDecodeError handles
+        # We manually check the status code for success on the PING endpoint
+        if url.endswith("/api/v3/ping") and response.status_code == 200:
+             status = "UP"
+             result_detail = f"OK (Ping Success, {response_time_ms}ms)"
+             return status, result_detail, response_time_ms, {}
+        
         status = "Invalid JSON"
         result_detail = "Response was not valid JSON."
         return status, result_detail, -1, {"error": result_detail}
@@ -145,7 +168,7 @@ def run_all_checks():
             st.session_state.api_configs[i]['status'] = final_status
             st.session_state.api_configs[i]['last_check'] = datetime.now()
             st.session_state.api_configs[i]['last_result'] = final_result
-            st.session_state.api_configs[i]['last_data'] = final_data
+            st.session_session.api_configs[i]['last_data'] = final_data
             
             # Add to history
             new_history_entries.append({
@@ -156,9 +179,7 @@ def run_all_checks():
             })
 
         # --- Final Status Update ---
-        # The line below caused a TypeError in the Streamlit environment.
-        # status_box.update(label="All Checks Complete.", state="complete", icon="🎉")
-        # We rely on the 'with st.status' block exiting successfully for the final state.
+        # The 'with st.status' block exiting successfully sets the final state.
         
     # Append new history and manage size
     if new_history_entries:
@@ -173,47 +194,48 @@ def run_all_checks():
 
 # --- Streamlit UI Layout ---
 
-st.title("Bitcoin Data Dashboard (Price & Feed Health)")
-st.markdown("A unified view for **live Bitcoin pricing** and critical **Bitcoin Blockchain API health statuses** monitored with exponential backoff.")
+st.title("Bitcoin Data Dashboard (TA Prep & Feed Health)")
+st.markdown("Live data pulled from **Binance API**. Health monitored with **exponential backoff**.")
 
 # --- 0. Live Bitcoin Tracking ---
-st.header("0. Live Bitcoin Tracking (Price API)")
-crypto_data = fetch_btc_price()
+st.header("0. Live Bitcoin Metrics (Binance API)")
+btc_price, btc_volume, btc_change = fetch_btc_data()
 
-if crypto_data and isinstance(crypto_data, dict):
+if btc_price is not None:
     
-    # Use two columns for metrics and one for the timestamp
-    col_price, col_24h_change, col_time = st.columns(3)
+    # Use three columns for metrics
+    col_price, col_24h_change, col_volume = st.columns(3)
     
-    # Extract Bitcoin data
-    btc = crypto_data.get('bitcoin', {})
-    btc_price = btc.get('usd')
-    btc_change = btc.get('usd_24h_change')
-    
-    # Format delta
-    btc_delta_str = f"{btc_change:.2f}%" if btc_change is not None else "N/A"
-
-    if btc_price is not None:
-        col_price.metric(
-            label="Bitcoin (BTC) Price", 
-            value=f"${btc_price:,.2f}", 
-            delta=btc_delta_str 
-        )
-    
-    if btc_change is not None:
-        col_24h_change.metric(
-            label="24h Change",
-            value=f"{btc_change:.2f}%",
-            delta_color="normal"
-        )
+    # Format volume for readability
+    if btc_volume >= 1_000_000_000:
+        volume_str = f"${btc_volume / 1_000_000_000:,.2f}B"
+    elif btc_volume >= 1_000_000:
+        volume_str = f"${btc_volume / 1_000_000:,.2f}M"
     else:
-        col_24h_change.metric(label="24h Change", value="N/A", delta_color="off")
+        volume_str = f"${btc_volume:,.0f}"
 
+    btc_change_str = f"{btc_change:+.2f}%"
 
-    col_time.metric("Last Price Update", datetime.now().strftime("%H:%M:%S"))
-    st.caption("Live price fetched from CoinGecko's public API.")
+    col_price.metric(
+        label="Current Price (BTCUSDT)", 
+        value=f"${btc_price:,.2f}", 
+        delta=btc_change_str 
+    )
+    
+    col_24h_change.metric(
+        label="24h Change (%)",
+        value=f"{btc_change:+.2f}%",
+        delta_color="normal"
+    )
+
+    col_volume.metric(
+        label="24h Volume (BTC)", 
+        value=volume_str,
+    )
+    
+    st.caption(f"Data source: {BINANCE_API_URL}. Fetched at {datetime.now().strftime('%H:%M:%S')}")
 else:
-    st.warning("Bitcoin price data not available. Check the upstream API status.")
+    st.warning("Bitcoin data not available from Binance API. Check the connection or API health.")
 
 st.markdown("---")
 
@@ -223,7 +245,7 @@ st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_wi
 st.markdown("---")
 
 # --- 1. Feed Status Overview ---
-st.header("1. Critical Data Feed Health Check (Blockchain API)")
+st.header("1. Critical Data Feed Health Check")
 
 # Calculate metrics
 total_checks = len(st.session_state.api_configs)
