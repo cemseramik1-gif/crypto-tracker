@@ -138,24 +138,24 @@ st.sidebar.header("📊 Indicator Configuration")
 indicator_weights = {}
 for ind, config in INDICATOR_DEFAULTS.items():
     st.sidebar.subheader(f"{ind}")
-    w = st.sidebar.slider(f"Weight", 0.0, 0.2, config["weight"], 0.01, key=f"weight_{ind}")
+    w = st.sidebar.slider(f"Weight", 0.0, 0.2, config['weight'], 0.01, key=f"weight_{ind}")
     
     # Parameter adjustments
-    if "period" in config["params"]:
-        period = st.sidebar.slider(f"Period", 5, 50, config["params"]["period"], key=f"period_{ind}")
-        config["params"]["period"] = period
+    if "period" in config['params']:
+        period = st.sidebar.slider(f"Period", 5, 50, config['params']['period'], key=f"period_{ind}")
+        config['params']['period'] = period
     
     # Custom sliders for EMA fast/slow
     if ind == "EMA Cross":
-        fast = st.sidebar.slider("Fast EMA", 5, 20, config["params"]["fast"], key="ema_fast")
-        slow = st.sidebar.slider("Slow EMA", 21, 50, config["params"]["slow"], key="ema_slow")
-        config["params"]["fast"] = fast
-        config["params"]["slow"] = slow
+        fast = st.sidebar.slider("Fast EMA", 5, 20, config['params']['fast'], key="ema_fast")
+        slow = st.sidebar.slider("Slow EMA", 21, 50, config['params']['slow'], key="ema_slow")
+        config['params']['fast'] = fast
+        config['params']['slow'] = slow
 
     indicator_weights[ind] = {
         "weight": w, 
-        "neutral_tol": config["neutral_tol"],
-        "params": config["params"]
+        "neutral_tol": config['neutral_tol'],
+        "params": config['params']
     }
 
 # ---------------------------
@@ -277,13 +277,13 @@ def compute_enhanced_indicators(df, params):
     df = df.copy()
     
     # EMAs with customizable periods
-    ema_fast = params["EMA Cross"]["params"]["fast"]
-    ema_slow = params["EMA Cross"]["params"]["slow"]
+    ema_fast = params["EMA Cross"]['params']['fast']
+    ema_slow = params["EMA Cross"]['params']['slow']
     df[f"EMA{ema_fast}"] = df["close"].ewm(span=ema_fast, adjust=False).mean()
     df[f"EMA{ema_slow}"] = df["close"].ewm(span=ema_slow, adjust=False).mean()
     
     # MACD
-    macd_params = params["MACD"]["params"]
+    macd_params = params["MACD"]['params']
     # pandas_ta requires DataFrame access to apply dynamically named columns
     macd = ta.macd(df["close"], **macd_params) 
     if not macd.empty:
@@ -300,12 +300,12 @@ def compute_enhanced_indicators(df, params):
             df["MACD_Histogram"] = macd[hist_cols[0]]
     
     # RSI
-    rsi_period = params["RSI"]["params"]["period"]
+    rsi_period = params["RSI"]['params']['period']
     df["RSI"] = ta.rsi(df["close"], length=rsi_period)
     
     # Bollinger Bands
-    bb_params = params["Bollinger Bands"]["params"]
-    bbands = ta.bbands(df["close"], length=bb_params["period"], std=bb_params["std"])
+    bb_params = params["Bollinger Bands"]['params']
+    bbands = ta.bbands(df["close"], length=bb_params['period'], std=bb_params['std'])
     if not bbands.empty:
         upper_cols = [col for col in bbands.columns if 'BBU_' in col]
         lower_cols = [col for col in bbands.columns if 'BBL_' in col]
@@ -319,7 +319,7 @@ def compute_enhanced_indicators(df, params):
             df["BB_middle"] = bbands[middle_cols[0]]
     
     # Stochastic
-    stoch_params = params["Stochastic"]["params"]
+    stoch_params = params["Stochastic"]['params']
     stoch = ta.stoch(df["high"], df["low"], df["close"], **stoch_params)
     if not stoch.empty:
         k_cols = [col for col in stoch.columns if 'STOCHk_' in col]
@@ -433,8 +433,8 @@ def generate_trading_signals(df, weights):
         signals = {}
         
         # --- EMA Cross Signal ---
-        ema_fast = weights["EMA Cross"]["params"]["fast"]
-        ema_slow = weights["EMA Cross"]["params"]["slow"]
+        ema_fast = weights["EMA Cross"]['params']['fast']
+        ema_slow = weights["EMA Cross"]['params']['slow']
         fast_ema_col = f"EMA{ema_fast}"
         slow_ema_col = f"EMA{ema_slow}"
         
@@ -442,9 +442,9 @@ def generate_trading_signals(df, weights):
             fast_ema = last[fast_ema_col]
             slow_ema = last[slow_ema_col]
             
-            if fast_ema > slow_ema * (1 + weights["EMA Cross"]["neutral_tol"]):
+            if fast_ema > slow_ema * (1 + weights["EMA Cross"]['neutral_tol']):
                 signals["EMA Cross"] = ("Bullish", f"EMA{ema_fast} > EMA{ema_slow}")
-            elif fast_ema < slow_ema * (1 - weights["EMA Cross"]["neutral_tol"]):
+            elif fast_ema < slow_ema * (1 - weights["EMA Cross"]['neutral_tol']):
                 signals["EMA Cross"] = ("Bearish", f"EMA{ema_fast} < EMA{ema_slow}")
             else:
                 signals["EMA Cross"] = ("Neutral", "EMAs converging")
@@ -452,7 +452,7 @@ def generate_trading_signals(df, weights):
         # --- RSI Signal ---
         if "RSI" in df.columns and not pd.isna(last["RSI"]):
             rsi = last["RSI"]
-            rsi_tol = weights["RSI"]["neutral_tol"]
+            rsi_tol = weights["RSI"]['neutral_tol']
             if rsi > rsi_tol[1] + 10: # Overbought
                  signals["RSI"] = ("Bearish", f"Overbought ({rsi:.1f})")
             elif rsi > rsi_tol[1]:
@@ -494,7 +494,7 @@ def generate_trading_signals(df, weights):
         if "Stoch_K" in df.columns and "Stoch_D" in df.columns:
             stoch_k = last["Stoch_K"] if not pd.isna(last["Stoch_K"]) else 50
             stoch_d = last["Stoch_D"] if not pd.isna(last["Stoch_D"]) else 50
-            stoch_tol = weights["Stochastic"]["neutral_tol"]
+            stoch_tol = weights["Stochastic"]['neutral_tol']
             
             if stoch_k < stoch_tol[0] and stoch_d < stoch_tol[0] and stoch_k > stoch_d:
                 signals["Stochastic"] = ("Bullish", f"Oversold cross K:{stoch_k:.1f} D:{stoch_d:.1f}")
@@ -516,8 +516,8 @@ def calculate_combined_score(signals, weights):
         weighted_score = 0
         
         for indicator, signal in signals.items():
-            if indicator in weights and not pd.isna(weights[indicator]["weight"]):
-                weight = weights[indicator]["weight"]
+            if indicator in weights and not pd.isna(weights[indicator]['weight']):
+                weight = weights[indicator]['weight']
                 score = score_map.get(signal[0], 0)
                 weighted_score += score * weight
                 total_weight += weight
@@ -576,8 +576,8 @@ def create_enhanced_chart(df, asset, timeframe):
         )
         
         # EMAs
-        ema_fast = indicator_weights["EMA Cross"]["params"]["fast"]
-        ema_slow = indicator_weights["EMA Cross"]["params"]["slow"]
+        ema_fast = indicator_weights["EMA Cross"]['params']['fast']
+        ema_slow = indicator_weights["EMA Cross"]['params']['slow']
 
         if f'EMA{ema_fast}' in df.columns:
             fig.add_trace(go.Scatter(x=df['datetime'], y=df[f'EMA{ema_fast}'], name=f'EMA{ema_fast}', line=dict(color='orange', width=1), legendgroup='price'), row=1, col=1)
