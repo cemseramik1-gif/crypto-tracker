@@ -243,7 +243,7 @@ def calculate_ta(df):
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         df.ta.cci(length=20, append=True)
-        df.ta.williamsr(length=14, append=True)
+        df.ta.willr(length=14, append=True)  # Correct method name
         df.ta.ema(length=[9, 21, 50, 200], append=True)
         df.ta.adx(length=14, append=True)
         df.ta.ichimoku(append=True)
