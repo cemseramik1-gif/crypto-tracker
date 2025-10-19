@@ -156,14 +156,19 @@ def run_all_checks():
             })
 
         # --- Final Status Update ---
-        status_box.update(label="All Checks Complete.", state="complete", icon="🎉")
-
+        # The line below caused a TypeError in the Streamlit environment.
+        # status_box.update(label="All Checks Complete.", state="complete", icon="🎉")
+        # We rely on the 'with st.status' block exiting successfully for the final state.
+        
     # Append new history and manage size
     if new_history_entries:
         new_df = pd.DataFrame(new_history_entries)
         st.session_state.history = pd.concat([new_df, st.session_state.history]).reset_index(drop=True)
         # Keep only the last 50 entries
         st.session_state.history = st.session_state.history.head(50)
+        
+    # Provide a toast notification to confirm completion
+    st.toast("✅ All Health Checks Complete.")
 
 
 # --- Streamlit UI Layout ---
