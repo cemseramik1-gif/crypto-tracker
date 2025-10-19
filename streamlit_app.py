@@ -1,4 +1,4 @@
-# streamlit_live_crypto_dashboard.py
+# streamlit_live_crypto_dashboard_fixed.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,10 +25,7 @@ def fetch_price_data(coin='bitcoin', vs_currency='usd', days=90):
 
 @st.cache_data(ttl=300)
 def fetch_blockchain_metrics():
-    # Example: Glassnode free metric endpoint (mock)
-    # For a real deployment, replace with valid API or public source
-    url = "https://api.glassnode.com/v1/metrics/indicators/nup_l?api_key=FREE_API_KEY"
-    # Mock data: generate random NUPL & Supply in profit pct
+    # Mock blockchain metrics: NUPL & Supply in Profit
     dates = pd.date_range(end=datetime.today(), periods=90)
     df = pd.DataFrame({
         'date': dates,
@@ -46,12 +43,19 @@ def compute_indicators(df):
     df['EMA50'] = ta.ema(df['price'], length=50)
     df['EMA200'] = ta.ema(df['price'], length=200)
     df['RSI'] = ta.rsi(df['price'], length=14)
+
     macd = ta.macd(df['price'])
     df['MACD'] = macd['MACD_12_26_9']
     df['MACD_signal'] = macd['MACDs_12_26_9']
+
+    # Bollinger Bands: dynamic column names
     bbands = ta.bbands(df['price'])
-    df['BB_upper'] = bbands['BBU_20_2.0']
-    df['BB_lower'] = bbands['BBL_20_2.0']
+    for col in bbands.columns:
+        if 'BBU' in col:
+            df['BB_upper'] = bbands[col]
+        elif 'BBL' in col:
+            df['BB_lower'] = bbands[col]
+
     df['ATR'] = ta.atr(df['price'], df['price'], df['price'], length=14)
     df['OBV'] = ta.obv(df['price'], df.get('volume', pd.Series(1, index=df.index)))
     return df
@@ -66,7 +70,7 @@ def compute_signal(row):
         elif neutral_low <= val <= neutral_high: return 0
         else: return -1
 
-    # EMA cross signals (example)
+    # EMA cross signals
     ema_cross = row['EMA9'] - row['EMA21']
     signal_ema = tier(ema_cross, 0.5, -0.5, 0.5, -0.5)
     score += 0.3 * signal_ema
@@ -92,8 +96,6 @@ def compute_signal(row):
     signal_supply = tier(supply_pct, 80, 60, 80, 60)
     score += 0.2 * signal_supply
     weight_total += 0.2
-
-    # Remaining indicators could be added similarly
 
     overall = score / weight_total if weight_total else 0
     if overall >= 0.3: return "Bullish"
@@ -123,7 +125,7 @@ fig.add_trace(go.Scatter(x=df.index, y=df['EMA21'], mode='lines', name='EMA21'))
 fig.add_trace(go.Scatter(x=df.index, y=df['BB_upper'], line=dict(dash='dash'), name='BB Upper'))
 fig.add_trace(go.Scatter(x=df.index, y=df['BB_lower'], line=dict(dash='dash'), name='BB Lower'))
 
-# Add signal markers
+# Signal markers
 bullish = df[df['Signal']=='Bullish']
 neutral = df[df['Signal']=='Neutral']
 bearish = df[df['Signal']=='Bearish']
@@ -138,7 +140,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("Latest Signals & Metrics")
 st.dataframe(df.tail(10)[['price','EMA9','EMA21','RSI','MACD','NUPL','Supply_in_Profit_pct','Signal']])
 
-# Forecast example (simple projection)
+# Simple 30-day forecast
 st.subheader("Scenario Forecast (Next 30 Days)")
 last_price = df['price'].iloc[-1]
 forecast_days = 30
