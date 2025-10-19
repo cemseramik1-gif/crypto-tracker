@@ -1,7 +1,9 @@
 streamlit
 pandas
+pandas_ta
 numpy
 plotly
-pandas_ta
+ccxt
+statsmodels
+prophet
 requests
-import plotly.graph_objects as go
