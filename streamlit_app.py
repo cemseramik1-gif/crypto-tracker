@@ -22,14 +22,14 @@ KRAKEN_API_URL = "https://api.kraken.com"
 KRAKEN_TICKER_ENDPOINT = f"{KRAKEN_API_URL}/0/public/Ticker?pair=XBTUSD" 
 KRAKEN_OHLC_ENDPOINT = f"{KRAKEN_API_URL}/0/public/OHLC"
 
-# Mapping for Kraken OHLC intervals (in minutes) - ADDED 2 HOUR INTERVAL
+# Mapping for Kraken OHLC intervals (in minutes) - FIXED: REMOVED UNSUPPORTED 2 HOUR INTERVAL (120)
 KRAKEN_INTERVALS = {
     "1 minute": 1,
     "5 minute": 5,
     "15 minute": 15,
     "30 minute": 30,
     "1 hour": 60,
-    "2 hour": 120, # New 2-hour interval
+    # "2 hour": 120, <-- 120 is not a supported Kraken OHLC interval, causes EGeneral:Invalid arguments
     "4 hour": 240,
     "1 day": 1440,
     "1 week": 10080,
@@ -814,7 +814,7 @@ with st.sidebar:
     This app provides a health monitor for critical data feeds and an automated technical analysis (TA) signal matrix for BTC/USD.
     
     **Instructions for Use:**
-    1.  **Configure Timeframe:** Select the desired chart interval (now includes **2-hour**) and number of historical bars in the "TA Data Parameters" section below.
+    1.  **Configure Timeframe:** Select the desired chart interval and number of historical bars in the "TA Data Parameters" section below.
     2.  **View Signals:** The **Automated TA Signal Matrix** and **Tactical Alerts** reflect the selected timeframe. Signals that say "N/A" either lack sufficient historical data or failed calculation (e.g., if you set the bar count too low).
     3.  **Check Feeds:** Use the **Run All Health Checks Now** button to test the stability of the API sources.
 
@@ -835,7 +835,7 @@ with st.sidebar:
     selected_timeframe_str = st.selectbox(
         "Timeframe (Interval)",
         options=list(KRAKEN_INTERVALS.keys()),
-        index=5 # Default to '2 hour'
+        index=4 # Default to '1 hour'
     )
     selected_interval_minutes = KRAKEN_INTERVALS[selected_timeframe_str]
 
