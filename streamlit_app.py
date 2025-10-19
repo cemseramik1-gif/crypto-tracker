@@ -923,6 +923,56 @@ with st.sidebar:
             st.session_state['bar_count'] = preset_config['bars']
     
     st.markdown("---")
+
+# --- RISK MANAGEMENT ---
+st.header("4️⃣ Risk Management Calculator")
+
+risk_metrics = calculate_risk_management(etf_df.copy())
+
+if risk_metrics:
+    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+    
+    with col_r1:
+        st.markdown("""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 1rem; border-radius: 0.75rem; color: white; margin: 0.5rem 0;'>
+                <p style='font-size: 0.9rem; margin-bottom: 0.5rem; opacity: 0.9;'>Stop Loss (2x ATR)</p>
+                <p style='font-size: 1.5rem; font-weight: 700; margin: 0;'>""" + f"${risk_metrics.get('stop_loss', 0):,.2f}" + """</p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col_r2:
+        st.markdown("""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 1rem; border-radius: 0.75rem; color: white; margin: 0.5rem 0;'>
+                <p style='font-size: 0.9rem; margin-bottom: 0.5rem; opacity: 0.9;'>Take Profit (3x ATR)</p>
+                <p style='font-size: 1.5rem; font-weight: 700; margin: 0;'>""" + f"${risk_metrics.get('take_profit', 0):,.2f}" + """</p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col_r3:
+        st.markdown("""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 1rem; border-radius: 0.75rem; color: white; margin: 0.5rem 0;'>
+                <p style='font-size: 0.9rem; margin-bottom: 0.5rem; opacity: 0.9;'>Risk/Reward Ratio</p>
+                <p style='font-size: 1.5rem; font-weight: 700; margin: 0;'>""" + f"{risk_metrics.get('risk_reward', 0):.1f}:1" + """</p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col_r4:
+        st.markdown("""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 1rem; border-radius: 0.75rem; color: white; margin: 0.5rem 0;'>
+                <p style='font-size: 0.9rem; margin-bottom: 0.5rem; opacity: 0.9;'>Current ATR (14)</p>
+                <p style='font-size: 1.5rem; font-weight: 700; margin: 0;'>""" + f"${risk_metrics.get('atr', 0):,.2f}" + """</p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    st.info("💡 **Tip**: Use 2% of your portfolio as risk per trade. Position size = (Portfolio × 0.02) / Risk per unit")
+else:
+    st.warning("⚠️ Risk management data unavailable. Need sufficient historical data.")
+
+st.markdown("---")
     st.markdown("### Custom Settings")
     
     timeframe_options = ["1 min", "5 min", "15 min", "30 min", "1 hour", "4 hour", "1 day"]
@@ -1105,16 +1155,43 @@ st.header("3️⃣ Multi-Time Frame Confluence Analysis")
 col_conf1, col_conf2 = st.columns([1, 2])
 
 with col_conf1:
+    # Determine text color based on score
+    if score >= 2:
+        text_color = "#ffffff"
+        bg_gradient = "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+    elif score == 1:
+        text_color = "#ffffff"
+        bg_gradient = "linear-gradient(135deg, #34d399 0%, #10b981 100%)"
+    elif score <= -2:
+        text_color = "#ffffff"
+        bg_gradient = "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
+    elif score == -1:
+        text_color = "#ffffff"
+        bg_gradient = "linear-gradient(135deg, #f87171 0%, #ef4444 100%)"
+    else:
+        text_color = "#000000"
+        bg_gradient = "linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)"
+    
     st.markdown(f"""
-        <div class="confluence-box {color_class}" style="min-height: 250px;">
-            <p class="confluence-header">CONFLUENCE SCORE</p>
-            <p class="confluence-score">{score}/3</p>
-            <p style="font-size: 1.1rem; font-weight: 600; margin-top: 10px;">{signal}</p>
+        <div style="background: {bg_gradient}; padding: 20px; border-radius: 12px; 
+                    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); text-align: center; min-height: 250px;
+                    display: flex; flex-direction: column; justify-content: center;">
+            <p style="font-size: 1.5rem; font-weight: 700; margin-bottom: 10px; color: {text_color};">
+                CONFLUENCE SCORE
+            </p>
+            <p style="font-size: 3.5rem; font-weight: 900; line-height: 1; 
+                      text-shadow: 2px 2px 4px rgba(0,0,0,0.2); margin: 10px 0; color: {text_color};">
+                {score}/3
+            </p>
+            <p style="font-size: 1.2rem; font-weight: 600; margin-top: 10px; color: {text_color};">
+                {signal}
+            </p>
         </div>
     """, unsafe_allow_html=True)
 
 with col_conf2:
     st.subheader("Pillar Breakdown")
+    st.markdown("<p class='text-sm text-gray-700'>Score based on HTF Trend (200 EMA), ETF Momentum (RSI), and ETF Flow (VWAP)</p>", unsafe_allow_html=True)
     for factor in factors:
         st.markdown(f"- {factor}")
 
@@ -1128,47 +1205,16 @@ if len(st.session_state['confluence_history']) > 1:
 st.markdown("---")
 
 # --- RISK MANAGEMENT ---
-st.header("4️⃣ Risk Management Calculator")
-
-risk_metrics = calculate_risk_management(etf_df.copy())
-
-if risk_metrics:
-    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-    
-    with col_r1:
-        st.markdown('<div class="risk-box">', unsafe_allow_html=True)
-        st.markdown(f"**Stop Loss (2x ATR)**")
-        st.markdown(f"### ${risk_metrics.get('stop_loss', 0):,.2f}")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col_r2:
-        st.markdown('<div class="risk-box">', unsafe_allow_html=True)
-        st.markdown(f"**Take Profit (3x ATR)**")
-        st.markdown(f"### ${risk_metrics.get('take_profit', 0):,.2f}")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col_r3:
-        st.markdown('<div class="risk-box">', unsafe_allow_html=True)
-        st.markdown(f"**Risk/Reward Ratio**")
-        st.markdown(f"### {risk_metrics.get('risk_reward', 0):.1f}:1")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col_r4:
-        st.markdown('<div class="risk-box">', unsafe_allow_html=True)
-        st.markdown(f"**Current ATR (14)**")
-        st.markdown(f"### ${risk_metrics.get('atr', 0):,.2f}")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.info("💡 **Tip**: Use 2% of your portfolio as risk per trade. Position size = (Portfolio × 0.02) / Risk per unit")
-
-st.markdown("---")
 
 # --- TA SIGNAL MATRIX ---
 st.header("5️⃣ Technical Analysis Matrix")
 
 ta_signals_grouped = get_indicator_signal(etf_df.copy())
 
-# Add On-Chain data to signals
+# Add On-Chain data to signals (only if the key exists)
+if "On-Chain" not in ta_signals_grouped:
+    ta_signals_grouped["On-Chain"] = []
+
 block_height, hash_rate_phs = fetch_on_chain_data()
 if block_height:
     ta_signals_grouped["On-Chain"].append({
@@ -1177,7 +1223,6 @@ if block_height:
         'signal': 'Neutral'
     })
 if hash_rate_phs:
-    # Determine if hash rate is rising or falling (need historical comparison)
     ta_signals_grouped["On-Chain"].append({
         'name': 'Hash Rate',
         'value': f"{hash_rate_phs:.1f} PH/s",
