@@ -112,32 +112,34 @@ def get_indicator_signal(df):
     """Calculates all specified indicators and determines a bullish/bearish/neutral signal."""
     
     # Check if the DataFrame has enough data for a 14-period calculation
-    if df is None or df.empty or len(df) < 34: # MACD needs 26+12-1 = 37, but let's use 34 for a slightly lower threshold
+    # MACD needs 37 bars, Ichimoku needs 52 bars. We use 52 as the minimum safe threshold.
+    if df is None or df.empty or len(df) < 52: 
         return {}
     
     # --- 1. Calculate ALL indicators using pandas_ta ---
     
     # Momentum Indicators
-    df.ta.rsi(append=True) # RSI (default 14)
-    df.ta.macd(append=True) # MACD (default 12, 26, 9)
-    df.ta.stoch(append=True) # Stochastic Oscillator (default 14, 3, 3)
-    df.ta.cci(append=True) # CCI (default 14)
-    df.ta.willr(append=True) # Williams %R (default 14)
-    df.ta.adx(append=True) # ADX (default 14)
+    df.ta.rsi(append=True)
+    df.ta.macd(append=True)
+    df.ta.stoch(append=True) 
+    df.ta.cci(append=True) 
+    df.ta.willr(append=True) 
+    df.ta.adx(append=True) 
     
     # Volatility Indicators
-    df.ta.bbands(append=True) # Bollinger Bands (default 20, 2)
+    df.ta.bbands(append=True) 
     
     # Volume / Flow Indicators
-    df.ta.obv(append=True) # OBV
-    df.ta.mfi(append=True) # MFI (default 14)
+    df.ta.obv(append=True)
+    df.ta.mfi(append=True)
     
     # Trend Indicators
-    df.ta.ichimoku(append=True) # Ichimoku Cloud - Complex, will add later
+    df.ta.ichimoku(append=True)
 
     # --- 2. Define Signal Logic (Based on standard rules) ---
     
     signals = {}
+    close = df['Close'].iloc[-1]
     
     # --- RSI Signal (Momentum) ---
     rsi_val = df['RSI_14'].iloc[-1]
@@ -149,7 +151,6 @@ def get_indicator_signal(df):
         signals['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val:.2f})")
 
     # --- MACD Signal (Momentum/Trend) ---
-    # MACD Signal: MACDh_12_26_9 > 0 is Bullish, < 0 is Bearish
     macd_hist = df['MACDh_12_26_9'].iloc[-1]
     if macd_hist > 0:
         signals['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist:.4f})")
@@ -159,23 +160,49 @@ def get_indicator_signal(df):
         signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0")
         
     # --- Bollinger Bands Signal (Volatility) ---
-    # FIX: Corrected column names from BBU_20_2.0 to BBU_20_2 due to library naming convention.
-    close = df['Close'].iloc[-1]
-    
-    # We now look for 'BBU_20_2' and 'BBL_20_2'
-    upper_band = df['BBU_20_2'].iloc[-1]
-    lower_band = df['BBL_20_2'].iloc[-1]
-    
-    if close > upper_band:
-        signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close:.2f} > {upper_band:.2f})")
-    elif close < lower_band:
-        signals['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close:.2f} < {lower_band:.2f})")
-    else:
-        signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
+    # FIX: Dynamically search for the correct BBU/BBL column name
+    try:
+        upper_band_col = next(col for col in df.columns if col.startswith('BBU_'))
+        lower_band_col = next(col for col in df.columns if col.startswith('BBL_'))
+        
+        upper_band = df[upper_band_col].iloc[-1]
+        lower_band = df[lower_band_col].iloc[-1]
+        
+        if close > upper_band:
+            signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close:.2f} > {upper_band:.2f})")
+        elif close < lower_band:
+            signals['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close:.2f} < {lower_band:.2f})")
+        else:
+            signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
+            
+    except StopIteration:
+        signals['Bollinger Bands (20,2)'] = ('Neutral', 'Error: Column not found. Check pandas_ta.')
+    except Exception as e:
+        signals['Bollinger Bands (20,2)'] = ('Neutral', f'Error: {str(e)}')
 
+    # --- NEW: Stochastic Oscillator Signal (Momentum) ---
+    # Signal: %K > 80 is Bearish (Overbought), %K < 20 is Bullish (Oversold).
+    try:
+        k = df['STOCHk_14_3_3'].iloc[-1]
+        d = df['STOCHd_14_3_3'].iloc[-1] # D line for reference
+        
+        if k > 80:
+            signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"Overbought (%K={k:.2f})")
+        elif k < 20:
+            signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"Oversold (%K={k:.2f})")
+        else:
+            # We can use the crossover logic for a stronger signal when neutral
+            if d > 80 and k < d: # In overbought territory and K crosses below D
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"K crossing D, top range")
+            elif d < 20 and k > d: # In oversold territory and K crosses above D
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"K crossing D, bottom range")
+            else:
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k:.2f})")
+
+    except KeyError:
+        signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Error: Column not found.')
+        
     # --- Placeholders for remaining requested indicators ---
-    # We have calculated them above, now just need the logic.
-    signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['On-Balance Volume (OBV)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Money Flow Index (MFI)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Williams %R (14)'] = ('Neutral', 'Logic Not Yet Defined')
@@ -398,7 +425,7 @@ with st.sidebar:
     selected_timeframe_str = st.selectbox(
         "Timeframe (Interval)",
         options=list(KRAKEN_INTERVALS.keys()),
-        index=4 # CHANGED: Default to '1 hour' (index 4) instead of '1 day' (index 6)
+        index=4 # Default to '1 hour'
     )
     selected_interval_minutes = KRAKEN_INTERVALS[selected_timeframe_str]
 
@@ -464,7 +491,7 @@ if ta_signals:
             st.markdown(tile_html, unsafe_allow_html=True)
             
 else:
-    st.warning("Not enough historical data to calculate indicators. Try increasing the bar count or check data fetch status.")
+    st.warning("Not enough historical data to calculate indicators (min 52 bars). Try increasing the bar count or check data fetch status.")
 
 
 st.markdown("---")
