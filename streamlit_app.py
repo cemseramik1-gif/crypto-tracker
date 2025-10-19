@@ -7,40 +7,44 @@ from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide", page_title="Crypto Tracker (On-Chain)")
 
-st.title("Crypto Tracker — Price & On-Chain Dashboard (historical support)")
+st.title("Crypto Tracker — Price & On-Chain Dashboard (robust CSV parsing)")
 
 # ---------- Helpers ----------
 
 @st.cache_data(ttl=600)
+def clean_headers(df):
+    df.columns = [c.strip().replace(' ', '_').replace('-', '_').replace("'", "").replace("\ufeff","") for c in df.columns]
+    return df
+
+@st.cache_data(ttl=600)
 def parse_price_csv(uploaded_file):
-    df = pd.read_csv(uploaded_file, dtype=str)
+    df = pd.read_csv(uploaded_file)
+    df = clean_headers(df)
+    # find date column
     date_col = next((c for c in df.columns if 'date' in c.lower()), df.columns[0])
+    df.rename(columns={date_col: 'date'}, inplace=True)
+    # find price column
     price_col = next((c for c in df.columns[::-1] if any(k in c.lower() for k in ['close','price','last','adj'])), df.columns[-1])
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    df[price_col] = df[price_col].astype(str).str.replace('[$,]','', regex=True)
-    df[price_col] = pd.to_numeric(df[price_col], errors='coerce')
-    df = df.dropna(subset=[date_col, price_col])
-    out = df[[date_col, price_col]].rename(columns={date_col: 'date', price_col: 'close'})
-    out = out.sort_values('date').reset_index(drop=True)
-    out['date'] = pd.to_datetime(out['date']).dt.date
-    return out
+    df.rename(columns={price_col: 'close'}, inplace=True)
+    df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+    df['close'] = pd.to_numeric(df['close'].astype(str).str.replace('[$,]','', regex=True), errors='coerce')
+    df = df.dropna(subset=['date','close']).sort_values('date').reset_index(drop=True)
+    return df
 
 @st.cache_data(ttl=600)
 def parse_chain_csv_historical(uploaded_file):
-    """
-    Parse historical on-chain CSV with Date + metrics.
-    Each row = snapshot for a date.
-    """
     df = pd.read_csv(uploaded_file)
-    df.columns = [c.strip().replace(' ', '_').replace('-', '_').replace("'", "") for c in df.columns]
+    df = clean_headers(df)
+    # find date column
     date_col = next((c for c in df.columns if 'date' in c.lower()), None)
     if date_col is None:
-        raise ValueError("Historical CSV must have a Date column")
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce').dt.date
-    numeric_cols = df.columns.drop(date_col)
+        raise ValueError(f"Historical CSV must have a Date column. Found columns: {df.columns.tolist()}")
+    df.rename(columns={date_col: 'date'}, inplace=True)
+    df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+    numeric_cols = df.columns.drop('date')
     for c in numeric_cols:
         df[c] = pd.to_numeric(df[c].astype(str).str.replace('[$,]', '', regex=True), errors='coerce')
-    df = df.sort_values(date_col).reset_index(drop=True)
+    df = df.sort_values('date').reset_index(drop=True)
     return df
 
 def merge_by_date(price_df, chain_df):
