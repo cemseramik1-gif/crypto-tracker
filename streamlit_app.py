@@ -90,6 +90,7 @@ def get_html_color_class(signal):
     elif "Strong Trend" in signal or "Expansion" in signal or "Extreme" in signal or "Neutral" not in signal:
         return "bg-yellow-100 border-yellow-400 text-yellow-800", "text-yellow-600"
     else:
+        # Default for Neutral, Data Incomplete, or other non-directional signals
         return "bg-gray-100 border-gray-400 text-gray-700", "text-gray-500"
 
 # --- 3. API FETCHING FUNCTIONS (Including On-Chain) ---
@@ -217,15 +218,16 @@ def calculate_ta(df):
     Explicitly calculates all required TA indicators.
     """
     if df.empty or len(df) < 200: 
+        # Don't try to calculate if data is insufficient
         return df
     
     try: 
         # 1. Momentum
         df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True) # MACD calculation
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         df.ta.cci(length=20, append=True)
-        df.ta.williamsr(length=14, append=True) # Fixed/Verified: pandas-ta uses williamsr
+        df.ta.williamsr(length=14, append=True)
 
         # 2. Trend
         df.ta.ema(length=[9, 21, 50, 200], append=True)
@@ -250,22 +252,28 @@ def calculate_ta(df):
 def get_indicator_signal(df):
     """
     Calculates detailed signals for all available indicators (14 total).
+    Returns all four groups, even if they contain error messages.
     """
-    df = calculate_ta(df)
-    
-    if df.empty or len(df) < 200:
-        return {} 
-
-    latest_close = lookup_value(df, 'close')
-    
-    # Initialize groups for all 14 indicators
+    # Initialize groups with all necessary keys
     signals = {
         "Momentum": [],
         "Trend": [],
         "Volume & Flow": [],
         "Volatility": []
     }
+    
+    # --- RESILIENCE CHECK ---
+    if df.empty or len(df) < 200:
+        error_item = {'name': 'Data Error', 'value': 'N/A', 'signal': 'Data Incomplete (<200 bars)'}
+        for group in signals.keys():
+            # Populate every group with an error message instead of returning empty dict
+            signals[group].append(error_item) 
+        return signals
 
+    # Proceed with calculation only if data is sufficient
+    df = calculate_ta(df)
+    latest_close = lookup_value(df, 'close')
+    
     # --- MOMENTUM INDICATORS ---
     
     # RSI
@@ -278,7 +286,7 @@ def get_indicator_signal(df):
         elif rsi_val < 45: rsi_signal = "Bearish (Falling)"
         signals["Momentum"].append({'name': 'RSI (14)', 'value': f"{rsi_val:,.1f}", 'signal': rsi_signal})
     
-    # MACD Histogram
+    # MACD Histogram (Explicitly requested)
     macd_hist = lookup_value(df, 'MACDH_12_26_9')
     macd_signal = "Neutral"
     if macd_hist is not None:
@@ -305,7 +313,7 @@ def get_indicator_signal(df):
         elif cci_val < -100: cci_signal = "Bearish (New Trend)"
         signals["Momentum"].append({'name': 'CCI (20)', 'value': f"{cci_val:,.1f}", 'signal': cci_signal})
 
-    # Williams %R (The previously failing indicator)
+    # Williams %R
     williamsr_val = lookup_value(df, 'WPR_14')
     williamsr_signal = "Neutral"
     if williamsr_val is not None:
@@ -688,32 +696,30 @@ st.markdown("---")
 # 3. AUTOMATED TA SIGNAL MATRIX (Uses Entry Time Frame)
 st.header(f"3. Automated TA Signal Matrix ({selected_etf_label})")
 
-if not etf_df.empty and len(etf_df) >= 200:
-    ta_signals_grouped = get_indicator_signal(etf_df.copy())
+# The resilience is now built into get_indicator_signal, so we don't need the length check here.
+ta_signals_grouped = get_indicator_signal(etf_df.copy())
+
+for group_name, signals in ta_signals_grouped.items():
+    st.subheader(f"📊 {group_name} Indicators")
     
-    for group_name, signals in ta_signals_grouped.items():
-        st.subheader(f"📊 {group_name} Indicators")
+    num_signals = len(signals)
+    num_columns = min(num_signals, 5)
+    
+    for i in range(0, num_signals, 5):
+        row_signals = signals[i:i+5]
+        cols = st.columns(len(row_signals)) 
         
-        num_signals = len(signals)
-        num_columns = min(num_signals, 5)
-        
-        for i in range(0, num_signals, 5):
-            row_signals = signals[i:i+5]
-            cols = st.columns(len(row_signals)) 
+        for j, item in enumerate(row_signals):
+            tile_class, value_class = get_html_color_class(item['signal'])
             
-            for j, item in enumerate(row_signals):
-                tile_class, value_class = get_html_color_class(item['signal'])
-                
-                # Render the tile
-                cols[j].markdown(f"""
-                    <div class='ta-tile {tile_class}'>
-                        <p class='tile-name'>{item['name']}</p>
-                        <p class='tile-value {value_class}'>{item['value']}</p>
-                        <p class='tile-signal'>{item['signal']}</p>
-                    </div>
-                """, unsafe_allow_html=True)
-else:
-    st.warning(f"Not enough historical data available for the Entry Time Frame ({selected_etf_label}) or bar count ({bar_count}). Need at least 200 bars for robust TA.")
+            # Render the tile
+            cols[j].markdown(f"""
+                <div class='ta-tile {tile_class}'>
+                    <p class='tile-name'>{item['name']}</p>
+                    <p class='tile-value {value_class}'>{item['value']}</p>
+                    <p class='tile-signal'>{item['signal']}</p>
+                </div>
+            """, unsafe_allow_html=True)
 
 
 # ---
