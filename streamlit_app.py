@@ -254,37 +254,62 @@ def compute_enhanced_indicators(df, params):
     df[f"EMA{ema_fast}"] = df["close"].ewm(span=ema_fast, adjust=False).mean()
     df[f"EMA{ema_slow}"] = df["close"].ewm(span=ema_slow, adjust=False).mean()
     
-    # MACD
+    # MACD - Handle dynamic column names
     macd_params = params["MACD"]["params"]
     macd = ta.macd(df["close"], **macd_params)
-    df["MACD"] = macd[f"MACD_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
-    df["MACD_Signal"] = macd[f"MACDs_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
-    df["MACD_Histogram"] = macd[f"MACDh_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
+    if not macd.empty:
+        # Find the correct column names
+        macd_cols = [col for col in macd.columns if 'MACD_' in col and 'MACDs_' not in col and 'MACDh_' not in col]
+        signal_cols = [col for col in macd.columns if 'MACDs_' in col]
+        hist_cols = [col for col in macd.columns if 'MACDh_' in col]
+        
+        if macd_cols:
+            df["MACD"] = macd[macd_cols[0]]
+        if signal_cols:
+            df["MACD_Signal"] = macd[signal_cols[0]]
+        if hist_cols:
+            df["MACD_Histogram"] = macd[hist_cols[0]]
     
     # RSI
     rsi_period = params["RSI"]["params"]["period"]
     df["RSI"] = ta.rsi(df["close"], length=rsi_period)
     
-    # Bollinger Bands
+    # Bollinger Bands - Handle dynamic column names
     bb_params = params["Bollinger Bands"]["params"]
     bbands = ta.bbands(df["close"], length=bb_params["period"], std=bb_params["std"])
-    df["BB_upper"] = bbands[f"BBU_{bb_params['period']}_{bb_params['std']}.0"]
-    df["BB_lower"] = bbands[f"BBL_{bb_params['period']}_{bb_params['std']}.0"]
-    df["BB_middle"] = bbands[f"BBM_{bb_params['period']}_{bb_params['std']}.0"]
+    if not bbands.empty:
+        # Find the correct column names
+        upper_cols = [col for col in bbands.columns if 'BBU_' in col]
+        lower_cols = [col for col in bbands.columns if 'BBL_' in col]
+        middle_cols = [col for col in bbands.columns if 'BBM_' in col]
+        
+        if upper_cols:
+            df["BB_upper"] = bbands[upper_cols[0]]
+        if lower_cols:
+            df["BB_lower"] = bbands[lower_cols[0]]
+        if middle_cols:
+            df["BB_middle"] = bbands[middle_cols[0]]
     
     # Stochastic
     stoch_params = params["Stochastic"]["params"]
     stoch = ta.stoch(df["high"], df["low"], df["close"], **stoch_params)
-    df["Stoch_K"] = stoch[f"STOCHk_{stoch_params['k']}_{stoch_params['d']}"]
-    df["Stoch_D"] = stoch[f"STOCHd_{stoch_params['k']}_{stoch_params['d']}"]
+    if not stoch.empty:
+        k_cols = [col for col in stoch.columns if 'STOCHk_' in col]
+        d_cols = [col for col in stoch.columns if 'STOCHd_' in col]
+        
+        if k_cols:
+            df["Stoch_K"] = stoch[k_cols[0]]
+        if d_cols:
+            df["Stoch_D"] = stoch[d_cols[0]]
     
     # Ichimoku Cloud
     try:
         ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
-        df["Ichimoku_Base"] = ichimoku["its_26"]
-        df["Ichimoku_Conversion"] = ichimoku["ita_9"]
-        df["Ichimoku_Span_A"] = ichimoku["isa_9"]
-        df["Ichimoku_Span_B"] = ichimoku["isb_26"]
+        if ichimoku and len(ichimoku) > 0:
+            df["Ichimoku_Base"] = ichimoku[0]["ITS_9"]
+            df["Ichimoku_Conversion"] = ichimoku[0]["ITA_9"]
+            df["Ichimoku_Span_A"] = ichimoku[0]["ISA_9"]
+            df["Ichimoku_Span_B"] = ichimoku[0]["ISB_26"]
     except Exception as e:
         st.warning(f"Ichimoku calculation failed: {e}")
         # Set default values for Ichimoku columns
@@ -293,16 +318,47 @@ def compute_enhanced_indicators(df, params):
         df["Ichimoku_Span_A"] = df["close"]
         df["Ichimoku_Span_B"] = df["close"]
     
-    # Additional indicators
-    df["ADX"] = ta.adx(df["high"], df["low"], df["close"])["ADX_14"]
-    df["OBV"] = ta.obv(df["close"], df["volume"])
-    df["ATR"] = ta.atr(df["high"], df["low"], df["close"])
-    df["CMF"] = ta.cmf(df["high"], df["low"], df["close"], df["volume"])
-    df["VWAP"] = (df["volume"] * (df["high"] + df["low"] + df["close"])/3).cumsum() / df["volume"].cumsum()
+    # Additional indicators with error handling
+    try:
+        adx_result = ta.adx(df["high"], df["low"], df["close"])
+        if not adx_result.empty:
+            df["ADX"] = adx_result["ADX_14"]
+    except:
+        df["ADX"] = 0
     
-    # Volume indicators
-    vo_params = params["Volume Oscillator"]["params"]
-    df["VO"] = ta.pvo(df["volume"], **vo_params)["PVO_12_26_9"]
+    try:
+        df["OBV"] = ta.obv(df["close"], df["volume"])
+    except:
+        df["OBV"] = 0
+    
+    try:
+        atr_result = ta.atr(df["high"], df["low"], df["close"])
+        if not atr_result.empty:
+            df["ATR"] = atr_result
+    except:
+        df["ATR"] = 0
+    
+    try:
+        df["CMF"] = ta.cmf(df["high"], df["low"], df["close"], df["volume"])
+    except:
+        df["CMF"] = 0
+    
+    # VWAP calculation
+    try:
+        df["VWAP"] = (df["volume"] * (df["high"] + df["low"] + df["close"])/3).cumsum() / df["volume"].cumsum()
+    except:
+        df["VWAP"] = df["close"]
+    
+    # Volume oscillator
+    try:
+        vo_params = params["Volume Oscillator"]["params"]
+        vo_result = ta.pvo(df["volume"], **vo_params)
+        if not vo_result.empty:
+            pvo_cols = [col for col in vo_result.columns if 'PVO_' in col]
+            if pvo_cols:
+                df["VO"] = vo_result[pvo_cols[0]]
+    except:
+        df["VO"] = 0
     
     return df
 
@@ -314,35 +370,41 @@ def detect_market_regime(df):
     if len(df) < 50:
         return "Unknown"
     
-    returns = df["close"].pct_change().dropna()
-    volatility = returns.rolling(window=20).std()
-    
-    avg_volatility = volatility.mean()
-    current_vol = volatility.iloc[-1]
-    
-    if current_vol > avg_volatility * 1.5:
-        return "High Volatility"
-    elif current_vol < avg_volatility * 0.5:
-        return "Low Volatility"
-    else:
-        return "Normal"
+    try:
+        returns = df["close"].pct_change().dropna()
+        volatility = returns.rolling(window=20).std()
+        
+        avg_volatility = volatility.mean()
+        current_vol = volatility.iloc[-1]
+        
+        if current_vol > avg_volatility * 1.5:
+            return "High Volatility"
+        elif current_vol < avg_volatility * 0.5:
+            return "Low Volatility"
+        else:
+            return "Normal"
+    except:
+        return "Unknown"
 
 def calculate_risk_metrics(df):
     """Calculate comprehensive risk metrics"""
     if len(df) < 20:
         return {}
     
-    returns = df["close"].pct_change().dropna()
-    
-    metrics = {
-        "volatility": returns.std() * np.sqrt(365),  # Annualized
-        "sharpe_ratio": returns.mean() / returns.std() * np.sqrt(365) if returns.std() > 0 else 0,
-        "max_drawdown": (df["close"] / df["close"].cummax() - 1).min(),
-        "var_95": returns.quantile(0.05),
-        "current_momentum": (df["close"].iloc[-1] / df["close"].iloc[-10] - 1) if len(df) >= 10 else 0
-    }
-    
-    return metrics
+    try:
+        returns = df["close"].pct_change().dropna()
+        
+        metrics = {
+            "volatility": returns.std() * np.sqrt(365) if returns.std() > 0 else 0,  # Annualized
+            "sharpe_ratio": returns.mean() / returns.std() * np.sqrt(365) if returns.std() > 0 else 0,
+            "max_drawdown": (df["close"] / df["close"].cummax() - 1).min(),
+            "var_95": returns.quantile(0.05) if len(returns) > 0 else 0,
+            "current_momentum": (df["close"].iloc[-1] / df["close"].iloc[-10] - 1) if len(df) >= 10 else 0
+        }
+        
+        return metrics
+    except:
+        return {}
 
 # ---------------------------
 # ---- SIGNAL GENERATION ----
@@ -352,102 +414,120 @@ def generate_trading_signals(df, weights):
     if df.empty:
         return {}
     
-    last = df.iloc[-1]
-    signals = {}
-    
-    # EMA Cross Signal
-    ema_fast = weights["EMA Cross"]["params"]["fast"]
-    ema_slow = weights["EMA Cross"]["params"]["slow"]
-    fast_ema = last[f"EMA{ema_fast}"]
-    slow_ema = last[f"EMA{ema_slow}"]
-    
-    if fast_ema > slow_ema * (1 + weights["EMA Cross"]["neutral_tol"]):
-        signals["EMA Cross"] = ("Bullish", f"EMA{ema_fast} > EMA{ema_slow}")
-    elif fast_ema < slow_ema * (1 - weights["EMA Cross"]["neutral_tol"]):
-        signals["EMA Cross"] = ("Bearish", f"EMA{ema_fast} < EMA{ema_slow}")
-    else:
-        signals["EMA Cross"] = ("Neutral", "EMAs converging")
-    
-    # RSI Signal
-    rsi = last["RSI"]
-    rsi_tol = weights["RSI"]["neutral_tol"]
-    if rsi_tol[0] <= rsi <= rsi_tol[1]:
-        signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
-    elif rsi > 70:
-        signals["RSI"] = ("Bearish", f"Overbought {rsi:.1f}")
-    elif rsi < 30:
-        signals["RSI"] = ("Bullish", f"Oversold {rsi:.1f}")
-    else:
-        signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
-    
-    # MACD Signal
-    macd = last["MACD"]
-    macd_signal = last["MACD_Signal"]
-    if macd > macd_signal:
-        signals["MACD"] = ("Bullish", f"MACD {macd:.3f} > Signal {macd_signal:.3f}")
-    else:
-        signals["MACD"] = ("Bearish", f"MACD {macd:.3f} < Signal {macd_signal:.3f}")
-    
-    # Bollinger Bands Signal
-    price = last["close"]
-    bb_upper = last["BB_upper"]
-    bb_lower = last["BB_lower"]
-    if price <= bb_lower:
-        signals["Bollinger Bands"] = ("Bullish", "Price at lower band")
-    elif price >= bb_upper:
-        signals["Bollinger Bands"] = ("Bearish", "Price at upper band")
-    else:
-        signals["Bollinger Bands"] = ("Neutral", "Price within bands")
-    
-    # Stochastic Signal
-    stoch_k = last["Stoch_K"]
-    stoch_d = last["Stoch_D"]
-    stoch_tol = weights["Stochastic"]["neutral_tol"]
-    if stoch_k < stoch_tol[0] and stoch_d < stoch_tol[0]:
-        signals["Stochastic"] = ("Bullish", f"Oversold K:{stoch_k:.1f} D:{stoch_d:.1f}")
-    elif stoch_k > stoch_tol[1] and stoch_d > stoch_tol[1]:
-        signals["Stochastic"] = ("Bearish", f"Overbought K:{stoch_k:.1f} D:{stoch_d:.1f}")
-    else:
-        signals["Stochastic"] = ("Neutral", f"K:{stoch_k:.1f} D:{stoch_d:.1f}")
-    
-    # Ichimoku Signal
-    price = last["close"]
-    span_a = last["Ichimoku_Span_A"]
-    span_b = last["Ichimoku_Span_B"]
-    if price > span_a and price > span_b and span_a > span_b:
-        signals["Ichimoku"] = ("Bullish", "Strong uptrend")
-    elif price < span_a and price < span_b and span_a < span_b:
-        signals["Ichimoku"] = ("Bearish", "Strong downtrend")
-    else:
-        signals["Ichimoku"] = ("Neutral", "Consolidation")
-    
-    return signals
+    try:
+        last = df.iloc[-1]
+        signals = {}
+        
+        # EMA Cross Signal
+        ema_fast = weights["EMA Cross"]["params"]["fast"]
+        ema_slow = weights["EMA Cross"]["params"]["slow"]
+        fast_ema_col = f"EMA{ema_fast}"
+        slow_ema_col = f"EMA{ema_slow}"
+        
+        if fast_ema_col in df.columns and slow_ema_col in df.columns:
+            fast_ema = last[fast_ema_col]
+            slow_ema = last[slow_ema_col]
+            
+            if fast_ema > slow_ema * (1 + weights["EMA Cross"]["neutral_tol"]):
+                signals["EMA Cross"] = ("Bullish", f"EMA{ema_fast} > EMA{ema_slow}")
+            elif fast_ema < slow_ema * (1 - weights["EMA Cross"]["neutral_tol"]):
+                signals["EMA Cross"] = ("Bearish", f"EMA{ema_fast} < EMA{ema_slow}")
+            else:
+                signals["EMA Cross"] = ("Neutral", "EMAs converging")
+        
+        # RSI Signal
+        if "RSI" in df.columns and not pd.isna(last["RSI"]):
+            rsi = last["RSI"]
+            rsi_tol = weights["RSI"]["neutral_tol"]
+            if rsi_tol[0] <= rsi <= rsi_tol[1]:
+                signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
+            elif rsi > 70:
+                signals["RSI"] = ("Bearish", f"Overbought {rsi:.1f}")
+            elif rsi < 30:
+                signals["RSI"] = ("Bullish", f"Oversold {rsi:.1f}")
+            else:
+                signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
+        
+        # MACD Signal
+        if "MACD" in df.columns and "MACD_Signal" in df.columns:
+            macd = last["MACD"] if not pd.isna(last["MACD"]) else 0
+            macd_signal = last["MACD_Signal"] if not pd.isna(last["MACD_Signal"]) else 0
+            if macd > macd_signal:
+                signals["MACD"] = ("Bullish", f"MACD {macd:.3f} > Signal {macd_signal:.3f}")
+            else:
+                signals["MACD"] = ("Bearish", f"MACD {macd:.3f} < Signal {macd_signal:.3f}")
+        
+        # Bollinger Bands Signal
+        if "BB_upper" in df.columns and "BB_lower" in df.columns:
+            price = last["close"]
+            bb_upper = last["BB_upper"] if not pd.isna(last["BB_upper"]) else price * 1.1
+            bb_lower = last["BB_lower"] if not pd.isna(last["BB_lower"]) else price * 0.9
+            
+            if price <= bb_lower:
+                signals["Bollinger Bands"] = ("Bullish", "Price at lower band")
+            elif price >= bb_upper:
+                signals["Bollinger Bands"] = ("Bearish", "Price at upper band")
+            else:
+                signals["Bollinger Bands"] = ("Neutral", "Price within bands")
+        
+        # Stochastic Signal
+        if "Stoch_K" in df.columns and "Stoch_D" in df.columns:
+            stoch_k = last["Stoch_K"] if not pd.isna(last["Stoch_K"]) else 50
+            stoch_d = last["Stoch_D"] if not pd.isna(last["Stoch_D"]) else 50
+            stoch_tol = weights["Stochastic"]["neutral_tol"]
+            if stoch_k < stoch_tol[0] and stoch_d < stoch_tol[0]:
+                signals["Stochastic"] = ("Bullish", f"Oversold K:{stoch_k:.1f} D:{stoch_d:.1f}")
+            elif stoch_k > stoch_tol[1] and stoch_d > stoch_tol[1]:
+                signals["Stochastic"] = ("Bearish", f"Overbought K:{stoch_k:.1f} D:{stoch_d:.1f}")
+            else:
+                signals["Stochastic"] = ("Neutral", f"K:{stoch_k:.1f} D:{stoch_d:.1f}")
+        
+        # Ichimoku Signal
+        if all(col in df.columns for col in ["Ichimoku_Span_A", "Ichimoku_Span_B"]):
+            price = last["close"]
+            span_a = last["Ichimoku_Span_A"] if not pd.isna(last["Ichimoku_Span_A"]) else price
+            span_b = last["Ichimoku_Span_B"] if not pd.isna(last["Ichimoku_Span_B"]) else price
+            
+            if price > span_a and price > span_b and span_a > span_b:
+                signals["Ichimoku"] = ("Bullish", "Strong uptrend")
+            elif price < span_a and price < span_b and span_a < span_b:
+                signals["Ichimoku"] = ("Bearish", "Strong downtrend")
+            else:
+                signals["Ichimoku"] = ("Neutral", "Consolidation")
+        
+        return signals
+    except Exception as e:
+        st.error(f"Error generating signals: {e}")
+        return {}
 
 def calculate_combined_score(signals, weights):
     """Calculate overall sentiment score"""
-    score_map = {"Bullish": 1, "Neutral": 0, "Bearish": -1}
-    total_weight = 0
-    weighted_score = 0
-    
-    for indicator, signal in signals.items():
-        if indicator in weights:
-            weight = weights[indicator]["weight"]
-            score = score_map[signal[0]]
-            weighted_score += score * weight
-            total_weight += weight
-    
-    if total_weight > 0:
-        final_score = weighted_score / total_weight
-    else:
-        final_score = 0
-    
-    # Convert to sentiment
-    if final_score > 0.1:
-        return "Bullish", final_score
-    elif final_score < -0.1:
-        return "Bearish", final_score
-    else:
-        return "Neutral", final_score
+    try:
+        score_map = {"Bullish": 1, "Neutral": 0, "Bearish": -1}
+        total_weight = 0
+        weighted_score = 0
+        
+        for indicator, signal in signals.items():
+            if indicator in weights:
+                weight = weights[indicator]["weight"]
+                score = score_map[signal[0]]
+                weighted_score += score * weight
+                total_weight += weight
+        
+        if total_weight > 0:
+            final_score = weighted_score / total_weight
+        else:
+            final_score = 0
+        
+        # Convert to sentiment
+        if final_score > 0.1:
+            return "Bullish", final_score
+        elif final_score < -0.1:
+            return "Bearish", final_score
+        else:
+            return "Neutral", final_score
+    except:
+        return "Neutral", 0
 
 # ---------------------------
 # ----- VISUALIZATION -------
@@ -457,106 +537,120 @@ def create_enhanced_chart(df, asset, timeframe, signals):
     if df.empty:
         return go.Figure()
     
-    # Create subplots
-    fig = make_subplots(
-        rows=4, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.05,
-        subplot_titles=(
-            f'{asset} Price Chart - {timeframe}',
-            'Volume',
-            'RSI & Stochastic',
-            'MACD'
-        ),
-        row_heights=[0.5, 0.15, 0.15, 0.2]
-    )
-    
-    # Price data
-    fig.add_trace(
-        go.Candlestick(
-            x=df['datetime'],
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close'],
-            name='Price'
-        ), row=1, col=1
-    )
-    
-    # EMAs
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['EMA9'], name='EMA9', line=dict(color='blue')),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['EMA21'], name='EMA21', line=dict(color='orange')),
-        row=1, col=1
-    )
-    
-    # Bollinger Bands
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['BB_upper'], name='BB Upper', 
-                  line=dict(color='gray', dash='dash'), opacity=0.7),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['BB_lower'], name='BB Lower', 
-                  line=dict(color='gray', dash='dash'), opacity=0.7),
-        row=1, col=1
-    )
-    
-    # Volume
-    colors = ['red' if row['close'] < row['open'] else 'green' for _, row in df.iterrows()]
-    fig.add_trace(
-        go.Bar(x=df['datetime'], y=df['volume'], name='Volume', marker_color=colors),
-        row=2, col=1
-    )
-    
-    # RSI
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')),
-        row=3, col=1
-    )
-    # RSI levels
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
-    fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
-    
-    # Stochastic
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['Stoch_K'], name='Stoch %K', line=dict(color='blue')),
-        row=3, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['Stoch_D'], name='Stoch %D', line=dict(color='red')),
-        row=3, col=1
-    )
-    
-    # MACD
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')),
-        row=4, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df['datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')),
-        row=4, col=1
-    )
-    # MACD Histogram
-    colors_macd = ['red' if x < 0 else 'green' for x in df['MACD_Histogram']]
-    fig.add_trace(
-        go.Bar(x=df['datetime'], y=df['MACD_Histogram'], name='MACD Histogram', 
-               marker_color=colors_macd, opacity=0.6),
-        row=4, col=1
-    )
-    
-    fig.update_layout(
-        height=800,
-        showlegend=True,
-        xaxis_rangeslider_visible=False,
-        title=f"Technical Analysis - {asset} ({timeframe})"
-    )
-    
-    return fig
+    try:
+        # Create subplots
+        fig = make_subplots(
+            rows=4, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            subplot_titles=(
+                f'{asset} Price Chart - {timeframe}',
+                'Volume',
+                'RSI & Stochastic',
+                'MACD'
+            ),
+            row_heights=[0.5, 0.15, 0.15, 0.2]
+        )
+        
+        # Price data
+        fig.add_trace(
+            go.Candlestick(
+                x=df['datetime'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                name='Price'
+            ), row=1, col=1
+        )
+        
+        # EMAs
+        if 'EMA9' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['EMA9'], name='EMA9', line=dict(color='blue')),
+                row=1, col=1
+            )
+        if 'EMA21' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['EMA21'], name='EMA21', line=dict(color='orange')),
+                row=1, col=1
+            )
+        
+        # Bollinger Bands
+        if 'BB_upper' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['BB_upper'], name='BB Upper', 
+                          line=dict(color='gray', dash='dash'), opacity=0.7),
+                row=1, col=1
+            )
+        if 'BB_lower' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['BB_lower'], name='BB Lower', 
+                          line=dict(color='gray', dash='dash'), opacity=0.7),
+                row=1, col=1
+            )
+        
+        # Volume
+        colors = ['red' if row['close'] < row['open'] else 'green' for _, row in df.iterrows()]
+        fig.add_trace(
+            go.Bar(x=df['datetime'], y=df['volume'], name='Volume', marker_color=colors),
+            row=2, col=1
+        )
+        
+        # RSI
+        if 'RSI' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')),
+                row=3, col=1
+            )
+            # RSI levels
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
+        
+        # Stochastic
+        if 'Stoch_K' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['Stoch_K'], name='Stoch %K', line=dict(color='blue')),
+                row=3, col=1
+            )
+        if 'Stoch_D' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['Stoch_D'], name='Stoch %D', line=dict(color='red')),
+                row=3, col=1
+            )
+        
+        # MACD
+        if 'MACD' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')),
+                row=4, col=1
+            )
+        if 'MACD_Signal' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')),
+                row=4, col=1
+            )
+        # MACD Histogram
+        if 'MACD_Histogram' in df.columns:
+            colors_macd = ['red' if x < 0 else 'green' for x in df['MACD_Histogram']]
+            fig.add_trace(
+                go.Bar(x=df['datetime'], y=df['MACD_Histogram'], name='MACD Histogram', 
+                       marker_color=colors_macd, opacity=0.6),
+                row=4, col=1
+            )
+        
+        fig.update_layout(
+            height=800,
+            showlegend=True,
+            xaxis_rangeslider_visible=False,
+            title=f"Technical Analysis - {asset} ({timeframe})"
+        )
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating chart: {e}")
+        return go.Figure()
 
 # ---------------------------
 # ----- MAIN DASHBOARD ------
@@ -732,55 +826,4 @@ def main():
                         all_tf_signals.append((tf, sentiment, score))
             
             if all_tf_signals:
-                bullish_count = sum(1 for _, sentiment, _ in all_tf_signals if sentiment == "Bullish")
-                total_count = len(all_tf_signals)
-                
-                if bullish_count == total_count:
-                    suggestion = "🟢 Strong Buy - Bullish across all timeframes"
-                elif bullish_count >= total_count * 0.7:
-                    suggestion = "🟡 Cautious Buy - Mostly bullish"
-                elif bullish_count <= total_count * 0.3:
-                    suggestion = "🔴 Consider Sell - Mostly bearish"
-                else:
-                    suggestion = "⚪ Hold - Mixed signals"
-                
-                st.write(f"**{asset}**: {suggestion}")
-    
-    with insight_col2:
-        st.subheader("Risk Assessment")
-        
-        # Display risk warnings
-        for asset in selected_assets[:2]:
-            for tf in selected_tfs[-1:]:  # Use highest timeframe for risk assessment
-                if asset in st.session_state.market_data[tf]:
-                    df = st.session_state.market_data[tf][asset]
-                    if not df.empty and len(df) > 20:
-                        risk_metrics = calculate_risk_metrics(df)
-                        volatility = risk_metrics.get('volatility', 0)
-                        
-                        if volatility > 0.8:
-                            st.warning(f"🚨 {asset}: High volatility detected ({volatility:.1%})")
-                        elif volatility > 0.5:
-                            st.info(f"⚠️ {asset}: Elevated volatility ({volatility:.1%})")
-                        else:
-                            st.success(f"✅ {asset}: Normal volatility ({volatility:.1%})")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    ### 📚 How to Use This Dashboard
-    
-    1. **Asset Selection**: Choose cryptocurrencies from the sidebar
-    2. **Timeframe Analysis**: View multiple timeframes simultaneously
-    3. **Indicator Configuration**: Adjust weights and parameters in sidebar
-    4. **Risk Management**: Set your risk tolerance level
-    5. **Signal Interpretation**: 
-       - 🟢 Bullish: Favorable buying conditions
-       - 🔴 Bearish: Consider selling or shorting
-       - ⚪ Neutral: Wait for clearer signals
-    
-    **Disclaimer**: This tool is for educational purposes only. Always do your own research and consider consulting with a qualified financial advisor before making investment decisions.
-    """)
-
-if __name__ == "__main__":
-    main()
+                bullish_count = sum(1 for _, sentiment
