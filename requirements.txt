@@ -1,6 +1,13 @@
-streamlit
-pandas
-numpy
-requests
-plotly
-pandas-ta
+# Core Streamlit
+streamlit>=1.28.0
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+# Technical Analysis
+pandas-ta>=0.3.14b
+# API Requests
+requests>=2.31.0
+# Interactive Charts
+plotly>=5.17.0
+# Date/Time handling (usually included with Python, but explicit for clarity)
+python-dateutil>=2.8.2
