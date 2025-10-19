@@ -22,13 +22,14 @@ KRAKEN_API_URL = "https://api.kraken.com"
 KRAKEN_TICKER_ENDPOINT = f"{KRAKEN_API_URL}/0/public/Ticker?pair=XBTUSD" 
 KRAKEN_OHLC_ENDPOINT = f"{KRAKEN_API_URL}/0/public/OHLC"
 
-# Mapping for Kraken OHLC intervals (in minutes)
+# Mapping for Kraken OHLC intervals (in minutes) - ADDED 2 HOUR INTERVAL
 KRAKEN_INTERVALS = {
     "1 minute": 1,
     "5 minute": 5,
     "15 minute": 15,
     "30 minute": 30,
     "1 hour": 60,
+    "2 hour": 120, # New 2-hour interval
     "4 hour": 240,
     "1 day": 1440,
     "1 week": 10080,
@@ -165,7 +166,7 @@ def get_indicator_signal(df):
     
     # --- Momentum Indicators ---
     
-    # RSI (FIX: Added NaN check)
+    # RSI (FIX: Added NaN check and updated bullish threshold to 55)
     rsi_col = safe_column_lookup(df, 'RSI_')
     if rsi_col:
         rsi_val = df[rsi_col].iloc[-1]
@@ -174,10 +175,15 @@ def get_indicator_signal(df):
             signals['Momentum']['RSI (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
             rsi_val_str = f"{rsi_val:.2f}"
+            
             if rsi_val > 70:
-                signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
+                signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought (>70) ({rsi_val_str})", rsi_val_str)
             elif rsi_val < 30:
-                signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
+                signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold (<30) ({rsi_val_str})", rsi_val_str)
+            elif rsi_val >= 55: # Bullish Momentum Shift (requested change)
+                signals['Momentum']['RSI (14)'] = ('Bullish', f"Strong Momentum (>55) ({rsi_val_str})", rsi_val_str)
+            elif rsi_val <= 45: # Bearish Momentum Shift
+                signals['Momentum']['RSI (14)'] = ('Bearish', f"Weak Momentum (<45) ({rsi_val_str})", rsi_val_str)
             else:
                 signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
     else:
@@ -409,27 +415,40 @@ def get_indicator_signal(df):
 
     # --- Volatility Indicators ---
 
-    # Bollinger Bands (FIX: Added NaN check)
+    # Bollinger Bands (FIX: Added Median band and displayed all three values)
     upper_band_col = safe_column_lookup(df, 'BBU_')
+    median_band_col = safe_column_lookup(df, 'BBM_') # Middle band
     lower_band_col = safe_column_lookup(df, 'BBL_')
     
-    if upper_band_col and lower_band_col:
+    if upper_band_col and median_band_col and lower_band_col:
         upper_band = df[upper_band_col].iloc[-1]
+        median_band = df[median_band_col].iloc[-1]
         lower_band = df[lower_band_col].iloc[-1]
         
-        if math.isnan(upper_band) or math.isnan(lower_band):
+        if math.isnan(upper_band) or math.isnan(median_band) or math.isnan(lower_band):
              signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
+            # Format all three bands for the 'value' column: U|M|L
+            bb_val_str = f"U:{upper_band:,.0f} | M:{median_band:,.0f} | L:{lower_band:,.0f}"
+            
             if close > upper_band:
-                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close_str})", close_str)
+                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band (Squeeze Risk) ({close_str})", bb_val_str)
             elif close < lower_band:
-                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close_str})", close_str)
+                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band (Snap-back Risk) ({close_str})", bb_val_str)
             else:
-                signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close_str})", close_str)
+                # Inside the bands: signal is determined by position relative to the Median Band (BBM)
+                if close > median_band:
+                    detail = f"Price above Median Band ({close_str})"
+                    signal_type = 'Bullish'
+                else:
+                    detail = f"Price below Median Band ({close_str})"
+                    signal_type = 'Bearish'
+                    
+                signals['Volatility']['Bollinger Bands (20,2)'] = (signal_type, detail, bb_val_str)
     else:
         signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # ATR (FIX: Added NaN check)
+    # ATR (FIX: Ensuring value is populated)
     atr_col = safe_column_lookup(df, 'ATR_')
     if atr_col:
         atr_val = df[atr_col].iloc[-1]
@@ -438,7 +457,20 @@ def get_indicator_signal(df):
              signals['Volatility']['ATR (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
             atr_val_str = f"${atr_val:,.2f}"
-            signals['Volatility']['ATR (14)'] = ('Neutral', f"Average bar range: {atr_val_str}", atr_val_str)
+            
+            # Simple volatility expansion/contraction check
+            try:
+                atr_prev_avg = df[atr_col].iloc[-5:-1].mean() # Average of the 4 bars before the current one
+                if atr_val > atr_prev_avg * 1.2:
+                    detail = f"Volatility Expanding (+20% vs 4-bar avg)"
+                elif atr_val < atr_prev_avg * 0.8:
+                    detail = f"Volatility Contracting (-20% vs 4-bar avg)"
+                else:
+                    detail = f"Average bar range: {atr_val_str}"
+            except IndexError:
+                 detail = f"Average bar range: {atr_val_str}" # Fallback if not enough history for average
+                 
+            signals['Volatility']['ATR (14)'] = ('Neutral', detail, atr_val_str)
     else:
         signals['Volatility']['ATR (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
@@ -782,15 +814,17 @@ with st.sidebar:
     This app provides a health monitor for critical data feeds and an automated technical analysis (TA) signal matrix for BTC/USD.
     
     **Instructions for Use:**
-    1.  **Configure Timeframe:** Select the desired chart interval and number of historical bars in the "TA Data Parameters" section below.
+    1.  **Configure Timeframe:** Select the desired chart interval (now includes **2-hour**) and number of historical bars in the "TA Data Parameters" section below.
     2.  **View Signals:** The **Automated TA Signal Matrix** and **Tactical Alerts** reflect the selected timeframe. Signals that say "N/A" either lack sufficient historical data or failed calculation (e.g., if you set the bar count too low).
     3.  **Check Feeds:** Use the **Run All Health Checks Now** button to test the stability of the API sources.
 
     ---
     **Glossary of Indicators:**
-    * **RSI (Relative Strength Index):** Measures the speed and change of price movements. Signals Overbought (>70) or Oversold (<30).
+    * **RSI (Relative Strength Index):** Measures the speed and change of price movements. **Bullish signal now triggers above 55** to catch rising momentum sooner.
+    * **Bollinger Bands (BB):** Measures volatility using a moving average (Median Band) and standard deviations (Upper/Lower Bands).
     * **MACD (Moving Average Convergence Divergence):** Measures the relationship between two moving averages. Signal based on Histogram crossing zero.
     * **ADX (Average Directional Index):** Measures trend strength. High value (>25) indicates a strong trend (Bull or Bear, determined by +DI/-DI).
+    * **ATR (Average True Range):** Measures market **volatility** over a period. It's not directional but tells you the expected range of price movement.
     * **CMF (Chaikin Money Flow):** Measures the amount of Money Flow Volume over a specific period. Positive suggests accumulation (buying pressure).
     * **VWAP (Volume-Weighted Average Price):** The average price weighted by trading volume. Price above/below VWAP is Bullish/Bearish.
     """)
@@ -801,7 +835,7 @@ with st.sidebar:
     selected_timeframe_str = st.selectbox(
         "Timeframe (Interval)",
         options=list(KRAKEN_INTERVALS.keys()),
-        index=4 # Default to '1 hour'
+        index=5 # Default to '2 hour'
     )
     selected_interval_minutes = KRAKEN_INTERVALS[selected_timeframe_str]
 
