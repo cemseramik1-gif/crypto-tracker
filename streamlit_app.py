@@ -2,20 +2,46 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas_ta as ta
-import asyncio
-import aiohttp
-from textblob import TextBlob
-import tweepy
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import IsolationForest
 import warnings
 warnings.filterwarnings('ignore')
+
+# ---------------------------
+# DEPENDENCY HANDLING
+# ---------------------------
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    st.error("⚠️ yfinance not installed. Installing now...")
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance==0.2.18"])
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+
+try:
+    from textblob import TextBlob
+    TEXTBLOB_AVAILABLE = True
+except ImportError:
+    TEXTBLOB_AVAILABLE = False
+
+try:
+    import tweepy
+    TWEEPY_AVAILABLE = True
+except ImportError:
+    TWEEPY_AVAILABLE = False
+
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import IsolationForest
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
 # Page configuration
 st.set_page_config(
@@ -156,17 +182,36 @@ for ind, config in INDICATOR_DEFAULTS.items():
 def fetch_crypto_data(symbol="BTC-USD", period="60d", interval="1h"):
     """Fetch cryptocurrency data from Yahoo Finance"""
     try:
+        if not YFINANCE_AVAILABLE:
+            st.error("yfinance not available. Using fallback data.")
+            return create_sample_data()
+            
         ticker = yf.Ticker(symbol)
         data = ticker.history(period=period, interval=interval)
         if data.empty:
-            return pd.DataFrame()
+            st.warning(f"No data returned for {symbol}. Using sample data.")
+            return create_sample_data()
         
         data = data.reset_index()
         data.columns = [col.lower() for col in data.columns]
         return data[['datetime', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         st.error(f"Error fetching data for {symbol}: {e}")
-        return pd.DataFrame()
+        return create_sample_data()
+
+def create_sample_data():
+    """Create sample data when API fails"""
+    dates = pd.date_range(end=datetime.now(), periods=100, freq='H')
+    prices = 50000 + np.cumsum(np.random.randn(100) * 1000)
+    data = pd.DataFrame({
+        'datetime': dates,
+        'open': prices - np.random.rand(100) * 100,
+        'high': prices + np.random.rand(100) * 200,
+        'low': prices - np.random.rand(100) * 200,
+        'close': prices,
+        'volume': np.random.randint(1000, 10000, 100)
+    })
+    return data
 
 @st.cache_data(ttl=3600)
 def fetch_multiple_assets(assets, timeframe="1h"):
@@ -234,11 +279,19 @@ def compute_enhanced_indicators(df, params):
     df["Stoch_D"] = stoch[f"STOCHd_{stoch_params['k']}_{stoch_params['d']}"]
     
     # Ichimoku Cloud
-    ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
-    df["Ichimoku_Base"] = ichimoku["its_26"]
-    df["Ichimoku_Conversion"] = ichimoku["ita_9"]
-    df["Ichimoku_Span_A"] = ichimoku["isa_9"]
-    df["Ichimoku_Span_B"] = ichimoku["isb_26"]
+    try:
+        ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+        df["Ichimoku_Base"] = ichimoku["its_26"]
+        df["Ichimoku_Conversion"] = ichimoku["ita_9"]
+        df["Ichimoku_Span_A"] = ichimoku["isa_9"]
+        df["Ichimoku_Span_B"] = ichimoku["isb_26"]
+    except Exception as e:
+        st.warning(f"Ichimoku calculation failed: {e}")
+        # Set default values for Ichimoku columns
+        df["Ichimoku_Base"] = df["close"]
+        df["Ichimoku_Conversion"] = df["close"]
+        df["Ichimoku_Span_A"] = df["close"]
+        df["Ichimoku_Span_B"] = df["close"]
     
     # Additional indicators
     df["ADX"] = ta.adx(df["high"], df["low"], df["close"])["ADX_14"]
@@ -509,6 +562,10 @@ def create_enhanced_chart(df, asset, timeframe, signals):
 # ----- MAIN DASHBOARD ------
 # ---------------------------
 def main():
+    # Display dependency status
+    if not YFINANCE_AVAILABLE:
+        st.error("⚠️ yfinance is not available. Some features may be limited.")
+    
     # Market Overview Section
     st.header("📈 Market Overview")
     
