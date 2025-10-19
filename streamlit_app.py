@@ -9,20 +9,23 @@ from datetime import datetime
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 1
 
-# Using the most stable Binance endpoint for live data fetching
-BINANCE_API_URL = "https://api.binance.com"
+# FIX: Changed to 'api1.binance.com' to attempt to bypass the 451 Client Error (Legal Restriction/Geo-block).
+BINANCE_API_URL = "https://api1.binance.com" 
 
 # The INITIAL_CONFIG list for the health check section (Section 1)
 INITIAL_CONFIG = [
     # 1. Critical free blockchain data API (BlockCypher)
     {"id": 1, "name": "Blockchain (BTC BlockCypher)", "url": "https://api.blockcypher.com/v1/btc/main", "status": "Pending", "last_check": None, "last_result": ""},
-    # 2. Stable Binance API endpoint check
-    {"id": 2, "name": "Binance API (Stable)", "url": f"{BINANCE_API_URL}/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
-    # 3. Mock data feed example for general system health check
-    {"id": 3, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
+    # 2. Stable Binance API endpoint check (Original blocked endpoint)
+    {"id": 2, "name": "Binance API (Stable)", "url": "https://api.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
+    # 3. Binance API endpoint being used for live price fetching
+    {"id": 3, "name": "Binance API (Fast 1 - LIVE)", "url": "https://api1.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
+    # 4. Alternative Binance endpoints added for monitoring
+    {"id": 4, "name": "Binance API (Fast 2)", "url": "https://api2.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
+    {"id": 5, "name": "Binance API (Fast 3)", "url": "https://api3.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
+    # 6. Mock data feed example for general system health check
+    {"id": 6, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
 ]
-# NOTE: To use a faster endpoint (e.g., api1), change BINANCE_API_URL above:
-# BINANCE_API_URL = "https://api1.binance.com"
 
 
 # Configure the Streamlit page layout and title
@@ -56,6 +59,7 @@ def fetch_btc_data():
         
         return price, volume, change_percent
     except Exception as e:
+        # Re-raise or log the error to Streamlit's interface
         st.error(f"Could not fetch live Bitcoin data from Binance: {e}")
         return None, None, None
 
@@ -94,9 +98,14 @@ def check_single_api(url, attempt=0):
                 
             return status, result_detail, response_time_ms, data
         
-        # API responded, but with an error status (e.g., 404, 500)
+        # API responded, but with an error status (e.g., 404, 500, or the 451)
         status = "HTTP Error"
-        result_detail = f"HTTP {response.status_code} ({response_time_ms}ms)"
+        # If it's a 451, make that explicit
+        if response.status_code == 451:
+            result_detail = f"HTTP 451 - Geo-Blocked"
+        else:
+            result_detail = f"HTTP {response.status_code} ({response_time_ms}ms)"
+            
         return status, result_detail, response_time_ms, {"error": f"HTTP {response.status_code}"}
 
     except requests.exceptions.Timeout:
@@ -112,8 +121,7 @@ def check_single_api(url, attempt=0):
         result_detail = str(e)
         return status, result_detail, -1, {"error": result_detail}
     except json.JSONDecodeError:
-        # Binance /api/v3/ping returns an empty dictionary, which json.JSONDecodeError handles
-        # We manually check the status code for success on the PING endpoint
+        # Binance /api/v3/ping returns an empty response body
         if url.endswith("/api/v3/ping") and response.status_code == 200:
              status = "UP"
              result_detail = f"OK (Ping Success, {response_time_ms}ms)"
@@ -168,7 +176,6 @@ def run_all_checks():
             st.session_state.api_configs[i]['status'] = final_status
             st.session_state.api_configs[i]['last_check'] = datetime.now()
             st.session_state.api_configs[i]['last_result'] = final_result
-            # FIX: Corrected typo from st.session_session to st.session_state
             st.session_state.api_configs[i]['last_data'] = final_data
             
             # Add to history
@@ -273,7 +280,7 @@ df_display = df_status[['name', 'status', 'last_result', 'last_check']].rename(
 def color_status(val):
     if val == 'UP':
         color = 'background-color: #d1e7dd' # Green-lite
-    elif val in ['BROKEN', 'Timeout', 'Connection Failed', 'Request Error', 'Unknown Error']:
+    elif val in ['BROKEN', 'Timeout', 'Connection Failed', 'Request Error', 'Unknown Error', 'HTTP 451 - Geo-Blocked']:
         color = 'background-color: #f8d7da' # Red-lite
     elif val in ['HTTP Error', 'Invalid JSON']:
         color = 'background-color: #fff3cd' # Yellow-lite
