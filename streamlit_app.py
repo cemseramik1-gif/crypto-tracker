@@ -3,10 +3,10 @@ import requests
 import time
 import json
 import pandas as pd
-import numpy as np # Used for checking types and NaN handling
-import math # Used for math.isnan() check
+import numpy as np
+import math
 from datetime import datetime, timezone, timedelta
-import pandas_ta as ta # Import the technical analysis library
+import pandas_ta as ta
 
 # --- Configuration and Constants ---
 MAX_RETRIES = 3
@@ -41,6 +41,34 @@ INITIAL_CONFIG = [
     {"id": 3, "name": "Kraken API (Live Ticker)", "url": KRAKEN_TICKER_ENDPOINT, "status": "Pending", "last_check": None, "last_result": ""},
 ]
 
+# --- Comprehensive Indicator Glossary Data (Python Structure) ---
+INDICATOR_GLOSSARY = [
+    # --- Technical Analysis (TA) Indicators ---
+    {"name": "Relative Strength Index (RSI)", "type": "TA", "description": "Measures the speed and change of price movements. Primarily identifies overbought (>70) and oversold (<30) conditions. Bullish signal now triggers above 55 to catch rising momentum sooner.", "calculation": "RSI = 100 - [100 / (1 + Average Gain / Average Loss)]", "purpose": "Momentum & Reversal Signals"},
+    {"name": "Moving Average Convergence Divergence (MACD)", "type": "TA", "description": "A trend-following momentum indicator showing the relationship between two EMAs (12 and 26). The **Histogram** (MACD Line - Signal Line) crossing zero is the key signal.", "calculation": "MACD Line = 12-period EMA - 26-period EMA; Signal Line = 9-period EMA of MACD Line", "purpose": "Trend Direction & Momentum"},
+    {"name": "Bollinger Bands (BB)", "type": "TA", "description": "A volatility indicator consisting of a moving average (Median Band) and two standard deviation bands. Tight bands suggest low volatility; price outside bands suggests high volatility or extremes.", "calculation": "Middle Band: 20-day SMA; Outer Bands: SMA ± (2 * Standard Deviation)", "purpose": "Volatility & Price Extremes"},
+    {"name": "Exponential Moving Average (EMA)", "type": "TA", "description": "A type of moving average that gives more weight to recent data points, making it react faster to price changes than an SMA. Used for trend smoothing and dynamic support/resistance.", "calculation": "EMA = (Price * Multiplier) + (EMA yesterday * (1 - Multiplier))", "purpose": "Trend Smoothing & Speed"},
+    {"name": "Stochastic Oscillator", "type": "TA", "description": "A momentum indicator comparing a particular closing price of a security to a range of its prices over a certain period of time. Used to identify overbought (>80) and oversold (<20) conditions.", "calculation": "%K = 100 * ((Close - Low) / (High - Low))", "purpose": "Momentum & Reversal Signals"},
+    {"name": "Commodity Channel Index (CCI)", "type": "TA", "description": "Measures the current price level relative to an average price level over a given period. Used to identify price extremes: +100 and -100 are common thresholds for strength/weakness.", "calculation": "CCI = (Price - MA) / (0.015 * Mean Deviation)", "purpose": "Trend Strength & Price Extremes"},
+    {"name": "Williams %R", "type": "TA", "description": "A momentum indicator that measures overbought and oversold levels. It is similar to the Stochastic Oscillator but inverted, typically ranging from 0 to -100. Readings between -80 and -100 are oversold.", "calculation": "%R = ((Highest High - Close) / (Highest High - Lowest Low)) * -100", "purpose": "Momentum & Reversal Signals"},
+    {"name": "Average Directional Index (ADX)", "type": "TA", "description": "Measures the **strength** of a trend, not its direction. ADX values above 25 indicate a strong trend. The direction (+DI or -DI) tells you if the trend is bullish or bearish.", "calculation": "Uses the smoothed averages of Positive Directional Indicator (+DI) and Negative Directional Indicator (-DI).", "purpose": "Trend Strength"},
+    {"name": "Ichimoku Cloud", "type": "TA", "description": "A comprehensive, all-in-one indicator that shows support and resistance, momentum, and trend direction. The Cloud (Kumo) acts as a powerful dynamic support/resistance zone.", "calculation": "Composed of five lines, including the Conversion Line, Base Line, Lagging Span, Leading Span A, and Leading Span B.", "purpose": "Trend Direction, Momentum, S/R"},
+    {"name": "Chaikin Money Flow (CMF)", "type": "TA", "description": "Measures the amount of Money Flow Volume over a specific period. Positive suggests accumulation (buying pressure); negative suggests distribution (selling pressure).", "calculation": "CMF = 20-period sum of Money Flow Volume / 20-period sum of Volume", "purpose": "Volume & Accumulation/Distribution"},
+    {"name": "On-Balance Volume (OBV)", "type": "TA", "description": "Measures buying and selling pressure cumulatively. It is a running total of volume that tracks whether that volume is flowing into or out of a security. Rising OBV confirms a price increase; divergence signals weakness.", "calculation": "OBV = OBV previous + Volume (if close > close previous) or - Volume (if close < close previous)", "purpose": "Volume Confirmation"},
+    {"name": "Volume-Weighted Average Price (VWAP)", "type": "TA", "description": "The average price of an asset weighted by its trading volume. It often serves as a benchmark for institutional investors. Price above/below VWAP is Bullish/Bearish from an institutional perspective.", "calculation": "VWAP = Sum(Price * Volume) / Sum(Volume)", "purpose": "Institutional Benchmark & Intraday Trend"},
+    {"name": "Average True Range (ATR)", "type": "TA", "description": "Measures market **volatility**. It shows the average range between High, Low, and previous Close over a period. It's non-directional but essential for setting stop losses and target profit levels.", "calculation": "ATR = Smoothed average of True Range (TR)", "purpose": "Volatility & Risk Management"},
+    {"name": "Money Flow Index (MFI)", "type": "TA", "description": "A momentum indicator that uses both price and volume to identify overbought and oversold conditions. Similar to RSI, but incorporates volume data, making it a stronger measure of buying/selling pressure.", "calculation": "MFI = 100 - [100 / (1 + Money Flow Ratio)]", "purpose": "Volume-weighted Momentum & Reversal Signals"},
+    
+    # --- Blockchain / On-Chain Indicators ---
+    {"name": "Block Height & Block Time", "type": "On-Chain", "description": "The **Block Height** is the total number of blocks in the blockchain. The time between blocks (Block Time) is a measure of network health and confirmation speed. Rising block height confirms continuous network operation, which underpins the asset's existence.", "calculation": "Simple count of blocks. Time is calculated from block timestamps.", "purpose": "Network Health & Confirmation"},
+    {"name": "NVT Ratio (Network Value to Transactions)", "type": "On-Chain", "description": "Often called the 'P/E Ratio for Crypto,' NVT compares the asset's **Market Cap (Network Value)** to its daily **Transaction Volume**. High NVT suggests overvalued (low network usage), low NVT suggests undervalued (high network usage).", "calculation": "NVT Ratio = Market Capitalization / Daily Transferred Value (in USD)", "purpose": "Valuation, Overbought/Oversold"},
+    {"name": "MVRV Z-Score (Market Value to Realized Value)", "type": "On-Chain", "description": "MVRV Z-Score is a cyclical indicator. **Market Value (MV)** is Market Cap; **Realized Value (RV)** is the sum of all money paid for coins when they last moved. High Z-Score (far above 0) signals a market top; low Z-Score (far below 0) signals a market bottom.", "calculation": "MVRV Z-Score = (Market Value - Realized Value) / Standard Deviation of Market Value", "purpose": "Cyclical Market Tops/Bottoms"},
+    {"name": "SOPR (Spent Output Profit Ratio)", "type": "On-Chain", "description": "Compares the value of coins when they were last moved (Realized Value) to their value when they are being spent (Market Value). SOPR > 1 means holders are selling at a profit; SOPR < 1 means they are selling at a loss.", "calculation": "SOPR = (Current Price / Price when the UTXO was created)", "purpose": "Market Profitability and Sentiment"},
+    {"name": "Active Addresses / Entities", "type": "On-Chain", "description": "The number of unique blockchain addresses or estimated entities (users) active in a given period. Rising active addresses indicates increasing network adoption, utility, and demand.", "calculation": "Count of unique addresses/entities that participated in a transaction.", "purpose": "Network Utility & Adoption"},
+    {"name": "Exchange Netflow", "type": "On-Chain", "description": "The net difference between total coins moving **onto** exchanges (selling pressure) and total coins moving **off** exchanges (accumulation). Negative netflow is typically bullish.", "calculation": "Coins Inflow - Coins Outflow", "purpose": "Short-Term Selling Pressure & Liquidity"},
+    {"name": "Whale Wallet Balances", "type": "On-Chain", "description": "Tracks the aggregated balance of wallets holding a significant threshold of the asset. Accumulation by whales suggests confidence; distribution suggests caution.", "calculation": "Sum of balances across high-value addresses.", "purpose": "Large Investor Sentiment & Supply Shock"}
+]
+
 
 # Configure the Streamlit page layout and title
 st.set_page_config(
@@ -55,7 +83,7 @@ if 'api_configs' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Time', 'Feed', 'Status', 'Response Time (ms)'])
 
-# --- Utility Function for Robust Column Lookup (FIX FOR StopIteration) ---
+# --- Utility Function for Robust Column Lookup ---
 
 def safe_column_lookup(df, prefix):
     """Safely finds the first column in the DataFrame that starts with the given prefix."""
@@ -63,8 +91,179 @@ def safe_column_lookup(df, prefix):
         # Use a generator expression to find the column
         return next(col for col in df.columns if col.startswith(prefix))
     except StopIteration:
-        # Return None if no column is found, preventing StopIteration error
+        # Return None if no column is found
         return None
+
+# --- HTML Generator for Interactive Glossary ---
+
+def get_glossary_html(indicator_data):
+    """
+    Generates the complete HTML, CSS, and JavaScript for the interactive glossary.
+    Embeds the indicator data as a JSON string for client-side processing.
+    """
+    # Dump Python list to JSON string for JS consumption
+    json_data = json.dumps(indicator_data)
+
+    html_content = f"""
+    <!-- Load Lucide Icons for collapse/expand arrows -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <div class="max-w-full mx-auto bg-white rounded-xl shadow-lg p-4 md:p-6 mb-8">
+
+        <header class="mb-6 border-b-2 border-indigo-400 pb-3">
+            <h2 class="text-2xl font-bold text-gray-800">Comprehensive TA & On-Chain Glossary</h2>
+            <p class="text-sm text-gray-500">Includes Technical Analysis (TA) and fundamental Blockchain/On-Chain metrics.</p>
+        </header>
+
+        <!-- Search and Filter Controls -->
+        <div class="mb-6 space-y-4 sm:space-y-0 sm:flex sm:gap-4">
+            <input type="text" id="search-input" placeholder="Search indicator name or description..." class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 shadow-sm">
+            <select id="filter-select" class="p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 shadow-sm w-full sm:w-auto">
+                <option value="all">Filter by Type (All)</option>
+                <option value="TA">Technical Analysis (TA)</option>
+                <option value="On-Chain">Blockchain/On-Chain</option>
+            </select>
+        </div>
+
+        <!-- Indicator List Container -->
+        <div id="indicator-list" class="space-y-3">
+            <!-- Indicators inserted by JS -->
+        </div>
+    </div>
+
+    <script>
+        // --- Indicator Data Embedded from Python ---
+        const indicators = {json_data};
+        
+        // --- Core Functions (Optimized for Streamlit embedding) ---
+
+        const listContainer = document.getElementById('indicator-list');
+        const searchInput = document.getElementById('search-input');
+        const filterSelect = document.getElementById('filter-select');
+
+        function renderIndicators(list) {{
+            listContainer.innerHTML = '';
+            if (list.length === 0) {{
+                listContainer.innerHTML = '<p class="text-center text-gray-500 p-4 text-lg">No indicators found matching your criteria.</p>';
+                return;
+            }}
+
+            list.forEach((indicator) => {{
+                // Generate a unique ID for the dynamic header/content pair
+                const uniqueId = indicator.name.replace(/[^a-zA-Z0-9]/g, '');
+                
+                const typeClass = indicator.type === 'TA' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700';
+                const borderColor = indicator.type === 'TA' ? 'border-indigo-500' : 'border-green-500';
+
+                const element = document.createElement('div');
+                element.className = 'bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden';
+                element.innerHTML = `
+                    <div id="header-${uniqueId}" data-id="${uniqueId}" class="indicator-header flex justify-between items-center p-3 md:p-4 bg-gray-50 hover:bg-gray-100 transition duration-150 ease-in-out select-none rounded-lg">
+                        <div class="flex items-center space-x-3">
+                            <span class="px-2 py-0.5 text-xs font-semibold rounded-full ${typeClass}">
+                                ${indicator.type}
+                            </span>
+                            <h3 class="text-base font-semibold text-gray-800">${indicator.name}</h3>
+                        </div>
+                        <svg data-lucide="chevron-down" class="text-gray-500 w-5 h-5 transition-transform duration-300"></svg>
+                    </div>
+
+                    <div id="content-${uniqueId}" class="indicator-content px-4 md:px-5">
+                        <div class="text-gray-700 space-y-3">
+                            <p>
+                                <span class="font-semibold text-gray-900 block mb-1">Description:</span>
+                                ${indicator.description}
+                            </p>
+                            <p class="border-l-4 ${borderColor} pl-3 py-1 bg-gray-50 rounded-r text-sm">
+                                <span class="font-bold text-gray-900 block">Primary Purpose:</span>
+                                ${indicator.purpose}
+                            </p>
+                            <p class="text-sm">
+                                <span class="font-semibold text-gray-900 block mb-1">Calculation/Concept:</span>
+                                <code>${indicator.calculation}</code>
+                            </p>
+                        </div>
+                    </div>
+                `;
+                listContainer.appendChild(element);
+            }});
+
+            // Set up click listeners after all elements are created
+            document.querySelectorAll('.indicator-header').forEach(header => {{
+                const id = header.getAttribute('data-id');
+                const content = document.getElementById(`content-${id}`);
+                const icon = header.querySelector('svg');
+
+                if (content && icon) {{
+                    // Add event listener for collapse/expand
+                    header.addEventListener('click', () => {{
+                        const isExpanded = content.classList.toggle('active');
+                        icon.style.transform = isExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
+                    }});
+                }}
+            }});
+            
+            // Re-render Lucide icons (MUST be called after elements are added to DOM)
+            if (typeof lucide !== 'undefined') {{
+                lucide.createIcons();
+            }}
+        }}
+
+        function filterAndSearch() {{
+            const searchTerm = searchInput.value.toLowerCase().trim();
+            const filterType = filterSelect.value;
+
+            const filteredList = indicators.filter(indicator => {{
+                const matchesSearch = indicator.name.toLowerCase().includes(searchTerm) ||
+                                      indicator.description.toLowerCase().includes(searchTerm);
+                const matchesFilter = filterType === 'all' || indicator.type === filterType;
+
+                return matchesSearch && matchesFilter;
+            }});
+
+            renderIndicators(filteredList);
+        }}
+
+        // Initial setup on script load
+        // Check if elements are available before binding events (important for Streamlit render cycle)
+        if (listContainer && searchInput && filterSelect) {{
+            renderIndicators(indicators);
+            searchInput.addEventListener('input', filterAndSearch);
+            filterSelect.addEventListener('change', filterAndSearch);
+        }}
+    </script>
+    
+    <!-- Inline CSS required for Streamlit custom components -->
+    <style>
+        .indicator-header {{
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }}
+        .indicator-header:hover {{
+            background-color: #e2e8f0; /* Slate 200 */
+        }}
+        .indicator-content {{
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease-in-out, padding 0.4s ease-in-out;
+            background-color: #f9fafb; /* Lightest gray background */
+        }}
+        .indicator-content.active {{
+            max-height: 1000px; 
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+        }}
+        code {{
+            background-color: #eef2ff; /* Indigo 50 */
+            padding: 2px 4px;
+            border-radius: 4px;
+            color: #4338ca; /* Indigo 700 */
+            font-size: 0.85rem;
+        }}
+    </style>
+    """
+    return html_content
+
 
 # --- Historical Data Fetcher (Kraken OHLC) ---
 
@@ -108,7 +307,7 @@ def fetch_historical_data(interval_minutes, count=300):
         
         # Convert types and set index
         df['Time'] = pd.to_datetime(df['Time'], unit='s', utc=True)
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume', 'VWAP']: # Added VWAP here to ensure it's a float
+        for col in ['Open', 'High', 'Low', 'Low', 'Close', 'Volume', 'VWAP']: # Added VWAP here to ensure it's a float
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # Limit to the most recent 'count' bars and drop the last (potentially partial) bar
@@ -165,7 +364,7 @@ def get_indicator_signal(df):
     
     # --- Momentum Indicators ---
     
-    # RSI (FIX: Added NaN check and updated bullish threshold to 55)
+    # RSI
     rsi_col = safe_column_lookup(df, 'RSI_')
     if rsi_col:
         rsi_val = df[rsi_col].iloc[-1]
@@ -179,16 +378,16 @@ def get_indicator_signal(df):
                 signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought (>70) ({rsi_val_str})", rsi_val_str)
             elif rsi_val < 30:
                 signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold (<30) ({rsi_val_str})", rsi_val_str)
-            elif rsi_val >= 55: # Bullish Momentum Shift (requested change)
+            elif rsi_val >= 55: 
                 signals['Momentum']['RSI (14)'] = ('Bullish', f"Strong Momentum (>55) ({rsi_val_str})", rsi_val_str)
-            elif rsi_val <= 45: # Bearish Momentum Shift
+            elif rsi_val <= 45: 
                 signals['Momentum']['RSI (14)'] = ('Bearish', f"Weak Momentum (<45) ({rsi_val_str})", rsi_val_str)
             else:
                 signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
     else:
         signals['Momentum']['RSI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # Stochastic Oscillator (FIX: Added NaN check)
+    # Stochastic Oscillator
     stoch_k_col = safe_column_lookup(df, 'STOCHk_')
     if stoch_k_col:
         k = df[stoch_k_col].iloc[-1]
@@ -206,7 +405,7 @@ def get_indicator_signal(df):
     else:
         signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
-    # CCI (FIX: Added NaN check)
+    # CCI
     cci_col = safe_column_lookup(df, 'CCI_')
     if cci_col:
         cci_val = df[cci_col].iloc[-1]
@@ -224,7 +423,7 @@ def get_indicator_signal(df):
     else:
         signals['Momentum']['CCI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
-    # MFI (FIX: Added NaN check)
+    # MFI
     mfi_col = safe_column_lookup(df, 'MFI_')
     if mfi_col:
         mfi_val = df[mfi_col].iloc[-1]
@@ -242,7 +441,7 @@ def get_indicator_signal(df):
     else:
         signals['Momentum']['MFI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # Williams %R (FIX: Added NaN check)
+    # Williams %R
     willr_col = safe_column_lookup(df, 'WMR_') or safe_column_lookup(df, 'WILLR_')
     if willr_col:
         willr_val = df[willr_col].iloc[-1]
@@ -273,25 +472,24 @@ def get_indicator_signal(df):
         macd_line = df[macd_line_col].iloc[-1]
         macd_signal = df[macd_signal_col].iloc[-1]
         
-        # Check for NaN in all three components
         if math.isnan(macd_hist) or math.isnan(macd_line) or math.isnan(macd_signal):
              signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
             # Format the combined string for the Value column (M: MACD Line, S: Signal Line, H: Histogram)
-            macd_value_str = f"M:{macd_line:.4f} | S:{macd_signal:.4f} | H:{macd_hist:.4f}"
+            macd_value_str = f"M:{macd_line:,.4f} | S:{macd_signal:,.4f} | H:{macd_hist:,.4f}"
             
             # Signal logic remains based on Histogram
             if macd_hist > 0:
-                signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0", macd_value_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 (Bullish Cross)", macd_value_str)
             elif macd_hist < 0:
-                signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0", macd_value_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 (Bearish Cross)", macd_value_str)
             else:
-                signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_value_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0 (Neutral/Flat)", macd_value_str)
     else:
         signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Error in calculation)', 'N/A')
 
 
-    # ADX (FIX: Added NaN check for all components)
+    # ADX
     adx_col = safe_column_lookup(df, 'ADX_')
     di_plus_col = safe_column_lookup(df, 'DMP_')
     di_minus_col = safe_column_lookup(df, 'DMM_')
@@ -319,7 +517,7 @@ def get_indicator_signal(df):
         signals['Trend']['ADX (14)'] = ('Neutral', 'N/A (Error in calculation)', 'N/A')
 
 
-    # Ichimoku Cloud (FIX: Added NaN check for span_a/b)
+    # Ichimoku Cloud
     span_a_col = safe_column_lookup(df, 'ISA_')
     span_b_col = safe_column_lookup(df, 'ISB_')
 
@@ -341,7 +539,7 @@ def get_indicator_signal(df):
     else:
         signals['Trend']['Ichimoku Cloud'] = ('Neutral', 'N/A (Error)', 'N/A')
     
-    # EMA Signals (FIX: Added NaN check inside loop)
+    # EMA Signals
     ema_lengths = [9, 21, 50, 200]
     for length in ema_lengths:
         try:
@@ -363,7 +561,7 @@ def get_indicator_signal(df):
 
     # --- Volume Indicators ---
     
-    # CMF (FIX: Added NaN check)
+    # CMF
     cmf_col = safe_column_lookup(df, 'CMF_')
     if cmf_col:
         cmf_val = df[cmf_col].iloc[-1]
@@ -382,7 +580,7 @@ def get_indicator_signal(df):
         signals['Volume']['CMF (20)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
-    # OBV (FIX: Added NaN check)
+    # OBV
     try:
         obv_val = df['OBV'].iloc[-1]
         obv_prev = df['OBV'].iloc[-5] 
@@ -402,7 +600,7 @@ def get_indicator_signal(df):
     except IndexError:
         signals['Volume']['OBV'] = ('Neutral', 'N/A (Not enough bars)', 'N/A')
 
-    # VWAP (FIX: Implemented robust NaN check for the critical formatting error)
+    # VWAP
     try:
         vwap_val = df['VWAP'].iloc[-1]
         
@@ -424,7 +622,7 @@ def get_indicator_signal(df):
 
     # --- Volatility Indicators ---
 
-    # Bollinger Bands (FIX: Added Median band and displayed all three values)
+    # Bollinger Bands (NOW DISPLAYS ALL 3 VALUES)
     upper_band_col = safe_column_lookup(df, 'BBU_')
     median_band_col = safe_column_lookup(df, 'BBM_') # Middle band
     lower_band_col = safe_column_lookup(df, 'BBL_')
@@ -457,7 +655,7 @@ def get_indicator_signal(df):
     else:
         signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # ATR (FIX: Ensuring value is populated)
+    # ATR
     atr_col = safe_column_lookup(df, 'ATR_')
     if atr_col:
         atr_val = df[atr_col].iloc[-1]
@@ -816,27 +1014,10 @@ else:
 
 st.markdown("---")
 
-# --- Configuration Controls (Sidebar) & Instructions ---
+# --- Configuration Controls (Sidebar) ---
 with st.sidebar:
-    st.header("Instructions & Glossary")
-    st.markdown("""
-    This app provides a health monitor for critical data feeds and an automated technical analysis (TA) signal matrix for BTC/USD.
-    
-    **Instructions for Use:**
-    1.  **Configure Timeframe:** Select the desired chart interval and number of historical bars in the "TA Data Parameters" section below.
-    2.  **View Signals:** The **Automated TA Signal Matrix** and **Tactical Alerts** reflect the selected timeframe. Signals that say "N/A" either lack sufficient historical data or failed calculation (e.g., if you set the bar count too low).
-    3.  **Check Feeds:** Use the **Run All Health Checks Now** button to test the stability of the API sources.
-
-    ---
-    **Glossary of Indicators:**
-    * **RSI (Relative Strength Index):** Measures the speed and change of price movements. **Bullish signal now triggers above 55** to catch rising momentum sooner.
-    * **Bollinger Bands (BB):** Measures volatility using a moving average (Median Band) and standard deviations (Upper/Lower Bands).
-    * **MACD (Moving Average Convergence Divergence):** Measures the relationship between two moving averages. Signal based on Histogram crossing zero.
-    * **ADX (Average Directional Index):** Measures trend strength. High value (>25) indicates a strong trend (Bull or Bear, determined by +DI/-DI).
-    * **ATR (Average True Range):** Measures market **volatility** over a period. It's not directional but tells you the expected range of price movement.
-    * **CMF (Chaikin Money Flow):** Measures the amount of Money Flow Volume over a specific period. Positive suggests accumulation (buying pressure).
-    * **VWAP (Volume-Weighted Average Price):** The average price weighted by trading volume. Price above/below VWAP is Bullish/Bearish.
-    """)
+    st.header("App Controls")
+    st.markdown("Use these controls to adjust the data used for the Technical Analysis Signal Matrix.")
 
     st.subheader("TA Data Parameters")
     
@@ -856,6 +1037,28 @@ with st.sidebar:
         value=300,
         step=50
     )
+    
+    st.markdown("---")
+    st.subheader("API Details & Debug")
+    
+    selected_id = st.selectbox(
+        "Select Feed for JSON Detail",
+        options=[c['id'] for c in st.session_state.api_configs],
+        format_func=lambda x: next(c['name'] for c in st.session_state.api_configs if c['id'] == x)
+    )
+
+    selected_config = next(c for c in st.session_state.api_configs if c['id'] == selected_id)
+    
+    st.markdown(f"**URL:** `{selected_config['url']}`")
+    st.markdown(f"**Last Status:** `{selected_config['status']}`")
+    
+    st.markdown("#### Last Raw API Data/Error")
+    
+    last_data = selected_config.get('last_data', {})
+    if last_data:
+        st.json(last_data)
+    else:
+        st.code("No data available yet. Run the check.")
 
 
 # --- Action Button ---
@@ -977,6 +1180,9 @@ else:
     st.warning("Not enough historical data to calculate indicators (min 52 bars). Try increasing the bar count or check data fetch status.")
 
 
+# --- Interactive Glossary Section ---
+st.markdown(get_glossary_html(INDICATOR_GLOSSARY), unsafe_allow_html=True)
+
 # --- Feed Status Overview (Monitoring) ---
 st.header("Critical Data Feed Health Check")
 
@@ -1040,27 +1246,3 @@ else:
     st.info("No successful checks recorded yet. Run the checks to populate history.")
 
 st.markdown("---")
-
-# --- Configuration and Details (Sidebar) ---
-with st.sidebar:
-    
-    st.subheader("API Details & Debug")
-    
-    selected_id = st.selectbox(
-        "Select Feed for JSON Detail",
-        options=[c['id'] for c in st.session_state.api_configs],
-        format_func=lambda x: next(c['name'] for c in st.session_state.api_configs if c['id'] == x)
-    )
-
-    selected_config = next(c for c in st.session_state.api_configs if c['id'] == selected_id)
-    
-    st.markdown(f"**URL:** `{selected_config['url']}`")
-    st.markdown(f"**Last Status:** `{selected_config['status']}`")
-    
-    st.markdown("#### Last Raw API Data/Error")
-    
-    last_data = selected_config.get('last_data', {})
-    if last_data:
-        st.json(last_data)
-    else:
-        st.code("No data available yet. Run the check.")
