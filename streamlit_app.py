@@ -8,6 +8,7 @@ from datetime import datetime
 # --- Configuration and Constants ---
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 1
+# Note: The 'Blockchain (BTC BlockCypher)' is the free blockchain data API check.
 INITIAL_CONFIG = [
     {"id": 1, "name": "Blockchain (BTC BlockCypher)", "url": "https://api.blockcypher.com/v1/btc/main", "status": "Pending", "last_check": None, "last_result": ""},
     {"id": 2, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
@@ -16,7 +17,7 @@ INITIAL_CONFIG = [
 
 # Configure the Streamlit page layout and title
 st.set_page_config(
-    page_title="Dashboard to Rule Them All",
+    page_title="Bitcoin & Data Feed Monitoring Dashboard",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -27,7 +28,22 @@ if 'api_configs' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Time', 'Feed', 'Status', 'Response Time (ms)'])
 
-# --- Core Logic: API Check with Exponential Backoff ---
+# --- New: Bitcoin Price Fetcher ---
+
+@st.cache_data(ttl=60) # Cache price data for 60 seconds to avoid hitting API limits
+def fetch_btc_price():
+    """Fetches live Bitcoin price from CoinGecko's public API."""
+    # Using the simple price endpoint for only Bitcoin
+    price_url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
+    try:
+        response = requests.get(price_url, timeout=5)
+        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+        return response.json()
+    except Exception as e:
+        st.error(f"Could not fetch live Bitcoin price: {e}")
+        return None
+
+# --- Existing Core Logic: API Check with Exponential Backoff ---
 
 def check_single_api(url, attempt=0):
     """
@@ -54,6 +70,7 @@ def check_single_api(url, attempt=0):
             status = "UP"
             result_detail = f"OK ({response_time_ms}ms)"
             if isinstance(data, dict):
+                # Specific check for the BlockCypher blockchain API
                 if 'block_height' in data:
                     result_detail += f", Block: {data['block_height']:,}"
                 elif 'title' in data: # Example for JSONPlaceholder
@@ -151,16 +168,57 @@ def run_all_checks():
 
 # --- Streamlit UI Layout ---
 
-st.title("Data Feed Monitoring Dashboard")
-st.markdown("A unified view of multiple API feed statuses, built with Streamlit and featuring exponential backoff.")
+st.title("Bitcoin Data Dashboard (Price & Feed Health)")
+st.markdown("A unified view for **live Bitcoin pricing** and critical **Bitcoin Blockchain API health statuses** monitored with exponential backoff.")
 
-# --- Action Button ---
-st.button("Run All Checks Now", on_click=run_all_checks, use_container_width=True, type="primary")
+# --- 0. Live Bitcoin Tracking ---
+st.header("0. Live Bitcoin Tracking (Price API)")
+crypto_data = fetch_btc_price()
+
+if crypto_data and isinstance(crypto_data, dict):
+    
+    # Use two columns for metrics and one for the timestamp
+    col_price, col_24h_change, col_time = st.columns(3)
+    
+    # Extract Bitcoin data
+    btc = crypto_data.get('bitcoin', {})
+    btc_price = btc.get('usd')
+    btc_change = btc.get('usd_24h_change')
+    
+    # Format delta
+    btc_delta_str = f"{btc_change:.2f}%" if btc_change is not None else "N/A"
+
+    if btc_price is not None:
+        col_price.metric(
+            label="Bitcoin (BTC) Price", 
+            value=f"${btc_price:,.2f}", 
+            delta=btc_delta_str 
+        )
+    
+    if btc_change is not None:
+        col_24h_change.metric(
+            label="24h Change",
+            value=f"{btc_change:.2f}%",
+            delta_color="normal"
+        )
+    else:
+        col_24h_change.metric(label="24h Change", value="N/A", delta_color="off")
+
+
+    col_time.metric("Last Price Update", datetime.now().strftime("%H:%M:%S"))
+    st.caption("Live price fetched from CoinGecko's public API.")
+else:
+    st.warning("Bitcoin price data not available. Check the upstream API status.")
 
 st.markdown("---")
 
-# --- 1. Status Overview ---
-st.header("1. Feed Status Overview")
+# --- Action Button ---
+st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_width=True, type="primary")
+
+st.markdown("---")
+
+# --- 1. Feed Status Overview ---
+st.header("1. Critical Data Feed Health Check (Blockchain API)")
 
 # Calculate metrics
 total_checks = len(st.session_state.api_configs)
@@ -170,7 +228,7 @@ error_count = sum(1 for c in st.session_state.api_configs if c['status'] in ['HT
 
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric("Total Feeds", total_checks)
+col1.metric("Total Monitored Feeds", total_checks)
 col2.metric("Online (UP)", up_count, delta=f"{round(up_count/total_checks*100 if total_checks else 0)}%", delta_color="normal")
 col3.metric("Critical (BROKEN)", broken_count, delta=f"{round(broken_count/total_checks*100 if total_checks else 0)}%", delta_color="inverse")
 col4.metric("Error/Warning", error_count, delta_color="off")
@@ -187,7 +245,7 @@ df_display = df_status[['name', 'status', 'last_result', 'last_check']].rename(
 def color_status(val):
     if val == 'UP':
         color = 'background-color: #d1e7dd' # Green-lite
-    elif val in ['BROKEN', 'Timeout', 'Connection Failed']:
+    elif val in ['BROKEN', 'Timeout', 'Connection Failed', 'Request Error', 'Unknown Error']:
         color = 'background-color: #f8d7da' # Red-lite
     elif val in ['HTTP Error', 'Invalid JSON']:
         color = 'background-color: #fff3cd' # Yellow-lite
