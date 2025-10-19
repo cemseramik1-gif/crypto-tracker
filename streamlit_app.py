@@ -109,7 +109,10 @@ def fetch_historical_data(interval_minutes, count=300):
 # --- Technical Analysis (TA) Signal Logic ---
 
 def get_indicator_signal(df):
-    """Calculates all specified indicators and determines a bullish/bearish/neutral signal."""
+    """
+    Calculates all specified indicators and determines a bullish/bearish/neutral signal.
+    Returns (signal, detail, value_string) for each indicator.
+    """
     
     # Needs at least 52 bars for Ichimoku to be calculated properly.
     if df is None or df.empty or len(df) < 52: 
@@ -131,27 +134,29 @@ def get_indicator_signal(df):
     # --- 2. Define Signal Logic (Based on standard rules) ---
     signals = {}
     close = df['Close'].iloc[-1]
+    close_str = f"{close:,.0f}" # Formatted for price indicators
     
     # --- RSI Signal (Momentum) ---
     rsi_val = df['RSI_14'].iloc[-1]
+    rsi_val_str = f"{rsi_val:.2f}"
     if rsi_val > 70:
-        signals['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val:.2f})")
+        signals['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
     elif rsi_val < 30:
-        signals['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val:.2f})")
+        signals['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
     else:
-        signals['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val:.2f})")
+        signals['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
 
     # --- MACD Signal (Momentum/Trend) ---
     macd_hist = df['MACDh_12_26_9'].iloc[-1]
+    macd_hist_str = f"{macd_hist:.4f}"
     if macd_hist > 0:
-        signals['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist:.4f})")
+        signals['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
     elif macd_hist < 0:
-        signals['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist:.4f})")
+        signals['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
     else:
-        signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0")
+        signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
         
     # --- Bollinger Bands Signal (Volatility) ---
-    # Dynamic lookup to handle different pandas_ta versions (e.g., BBU_20_2 vs BBU_20_2.0)
     try:
         upper_band_col = next(col for col in df.columns if col.startswith('BBU_'))
         lower_band_col = next(col for col in df.columns if col.startswith('BBL_'))
@@ -160,69 +165,73 @@ def get_indicator_signal(df):
         lower_band = df[lower_band_col].iloc[-1]
         
         if close > upper_band:
-            signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close:.2f} > {upper_band:.2f})")
+            signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close_str} > {upper_band:.0f})", close_str)
         elif close < lower_band:
-            signals['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close:.2f} < {lower_band:.2f})")
+            signals['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close_str} < {lower_band:.0f})", close_str)
         else:
-            signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
+            signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close_str})", close_str)
             
     except StopIteration:
-        signals['Bollinger Bands (20,2)'] = ('Neutral', 'Error: BB Column not found.')
+        signals['Bollinger Bands (20,2)'] = ('Neutral', 'Error: BB Column not found.', 'N/A')
         
     # --- Stochastic Oscillator Signal (Momentum) ---
     try:
         k = df['STOCHk_14_3_3'].iloc[-1]
         d = df['STOCHd_14_3_3'].iloc[-1]
+        k_str = f"{k:.2f}"
         
         if k > 80:
-            signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"Overbought (%K={k:.2f})")
+            signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"Overbought (%K={k_str})", k_str)
         elif k < 20:
-            signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"Oversold (%K={k:.2f})")
+            signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"Oversold (%K={k_str})", k_str)
         else:
             if d > 80 and k < d: # In overbought and K crosses below D
-                 signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"K crossing D, top range")
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"K crossing D, top range", k_str)
             elif d < 20 and k > d: # In oversold and K crosses above D
-                 signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"K crossing D, bottom range")
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"K crossing D, bottom range", k_str)
             else:
-                 signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k:.2f})")
+                 signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k_str})", k_str)
     except KeyError:
-        signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Error: Column not found.')
+        signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Commodity Channel Index (CCI) Signal ---
     try:
         cci_val = df[next(col for col in df.columns if col.startswith('CCI_'))].iloc[-1]
+        cci_val_str = f"{cci_val:.2f}"
         if cci_val > 100:
-            signals['Commodity Channel Index (CCI)'] = ('Bearish', f"Extreme Overbought ({cci_val:.2f})")
+            signals['Commodity Channel Index (CCI)'] = ('Bearish', f"Extreme Overbought ({cci_val_str})", cci_val_str)
         elif cci_val < -100:
-            signals['Commodity Channel Index (CCI)'] = ('Bullish', f"Extreme Oversold ({cci_val:.2f})")
+            signals['Commodity Channel Index (CCI)'] = ('Bullish', f"Extreme Oversold ({cci_val_str})", cci_val_str)
         else:
-            signals['Commodity Channel Index (CCI)'] = ('Neutral', f"Between -100 and +100 ({cci_val:.2f})")
+            signals['Commodity Channel Index (CCI)'] = ('Neutral', f"Between -100 and +100 ({cci_val_str})", cci_val_str)
     except (KeyError, StopIteration):
-        signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Error: Column not found.')
+        signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Money Flow Index (MFI) Signal ---
     try:
         mfi_val = df[next(col for col in df.columns if col.startswith('MFI_'))].iloc[-1]
+        mfi_val_str = f"{mfi_val:.2f}"
         if mfi_val > 80:
-            signals['Money Flow Index (MFI)'] = ('Bearish', f"Overbought ({mfi_val:.2f})")
+            signals['Money Flow Index (MFI)'] = ('Bearish', f"Overbought ({mfi_val_str})", mfi_val_str)
         elif mfi_val < 20:
-            signals['Money Flow Index (MFI)'] = ('Bullish', f"Oversold ({mfi_val:.2f})")
+            signals['Money Flow Index (MFI)'] = ('Bullish', f"Oversold ({mfi_val_str})", mfi_val_str)
         else:
-            signals['Money Flow Index (MFI)'] = ('Neutral', f"Mid-Range ({mfi_val:.2f})")
+            signals['Money Flow Index (MFI)'] = ('Neutral', f"Mid-Range ({mfi_val_str})", mfi_val_str)
     except (KeyError, StopIteration):
-        signals['Money Flow Index (MFI)'] = ('Neutral', 'Error: Column not found.')
+        signals['Money Flow Index (MFI)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Williams %R Signal ---
     try:
         willr_val = df[next(col for col in df.columns if col.startswith('WMR_') or col.startswith('WILLR_'))].iloc[-1]
+        willr_val_str = f"{willr_val:.2f}"
         if willr_val > -20: # -20 is the overbought threshold
-            signals['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val:.2f})")
+            signals['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val_str})", willr_val_str)
         elif willr_val < -80: # -80 is the oversold threshold
-            signals['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val:.2f})")
+            signals['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val_str})", willr_val_str)
         else:
-            signals['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val:.2f})")
+            signals['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val_str})", willr_val_str)
     except (KeyError, StopIteration):
-        signals['Williams %R (14)'] = ('Neutral', 'Error: Column not found.')
+        signals['Williams %R (14)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Average Directional Index (ADX) Signal (Trend Strength & Direction) ---
     try:
@@ -230,33 +239,35 @@ def get_indicator_signal(df):
         di_plus = df[next(col for col in df.columns if col.startswith('DMP_'))].iloc[-1]
         di_minus = df[next(col for col in df.columns if col.startswith('DMM_'))].iloc[-1]
         
+        adx_str = f"{adx:.2f}"
         strength = "Weak"
         if adx > 25: strength = "Strong"
         elif adx > 20: strength = "Developing"
             
         if di_plus > di_minus:
-            signals['Average Directional Index (ADX)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)")
+            signals['Average Directional Index (ADX)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)", adx_str)
         elif di_minus > di_plus:
-            signals['Average Directional Index (ADX)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)")
+            signals['Average Directional Index (ADX)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)", adx_str)
         else:
-            signals['Average Directional Index (ADX)'] = ('Neutral', f"No Clear Trend Direction ({strength})")
+            signals['Average Directional Index (ADX)'] = ('Neutral', f"No Clear Trend Direction ({strength})", adx_str)
 
     except (KeyError, StopIteration):
-        signals['Average Directional Index (ADX)'] = ('Neutral', 'Error: Column not found.')
+        signals['Average Directional Index (ADX)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- On-Balance Volume (OBV) Signal (Simple trend check) ---
     try:
         obv_val = df['OBV'].iloc[-1]
         obv_prev = df['OBV'].iloc[-5] # Compare to 5 periods ago
+        obv_val_str = f"{obv_val:,.0f}"
         
         if obv_val > obv_prev:
-            signals['On-Balance Volume (OBV)'] = ('Bullish', "Volume increasing (OBV rising)")
+            signals['On-Balance Volume (OBV)'] = ('Bullish', "Volume increasing (OBV rising)", obv_val_str)
         elif obv_val < obv_prev:
-            signals['On-Balance Volume (OBV)'] = ('Bearish', "Volume decreasing (OBV falling)")
+            signals['On-Balance Volume (OBV)'] = ('Bearish', "Volume decreasing (OBV falling)", obv_val_str)
         else:
-            signals['On-Balance Volume (OBV)'] = ('Neutral', "Volume flat or range-bound")
+            signals['On-Balance Volume (OBV)'] = ('Neutral', "Volume flat or range-bound", obv_val_str)
     except KeyError:
-        signals['On-Balance Volume (OBV)'] = ('Neutral', 'Error: Column not found.')
+        signals['On-Balance Volume (OBV)'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Ichimoku Cloud Signal (Simplistic Cloud Position) ---
     try:
@@ -268,14 +279,14 @@ def get_indicator_signal(df):
         cloud_bottom = min(span_a, span_b)
         
         if close > cloud_top:
-            signals['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close:.2f})")
+            signals['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close_str})", close_str)
         elif close < cloud_bottom:
-            signals['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close:.2f})")
+            signals['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close_str})", close_str)
         else:
-            signals['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close:.2f})")
+            signals['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close_str})", close_str)
 
     except (KeyError, StopIteration):
-        signals['Ichimoku Cloud'] = ('Neutral', 'Error: Column not found.')
+        signals['Ichimoku Cloud'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     return signals
 
@@ -513,9 +524,9 @@ st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_wi
 
 st.markdown("---")
 
-# --- 4. Automated TA Signals (Tiled Matrix) ---
-st.header(f"4. Automated TA Signal Matrix ({selected_timeframe_str})")
-st.markdown("Consolidated signals (Bullish/Bearish/Neutral) for rapid analysis.")
+# --- 3. Automated TA Signals (Tiled Matrix) ---
+st.header(f"3. Automated TA Signal Matrix ({selected_timeframe_str})")
+st.markdown("Consolidated signals (Bullish/Bearish/Neutral) for rapid analysis, showing current indicator value.")
 
 historical_df = fetch_historical_data(selected_interval_minutes, selected_bar_count)
 ta_signals = get_indicator_signal(historical_df)
@@ -535,7 +546,7 @@ if ta_signals:
     # Sort signals alphabetically for consistent display
     sorted_signals = sorted(ta_signals.items(), key=lambda item: item[0])
 
-    for i, (indicator_name, (signal, detail)) in enumerate(sorted_signals):
+    for i, (indicator_name, (signal, detail, value_str)) in enumerate(sorted_signals):
         
         # Determine the color and icon
         bg_color = color_map.get(signal, '#6c757d')
@@ -552,9 +563,9 @@ if ta_signals:
             margin-bottom: 10px;
             height: 100px;
         ">
-            <h5 style="margin: 0; font-size: 16px;">{indicator_name}</h5>
-            <p style="margin: 5px 0 0 0; font-weight: bold; font-size: 20px;">{icon} {signal.upper()}</p>
-            <p style="margin: 0; font-size: 10px; opacity: 0.8;">{detail}</p>
+            <h5 style="margin: 0; font-size: 14px; opacity: 0.8;">{indicator_name}</h5>
+            <p style="margin: 0 0 2px 0; font-weight: bold; font-size: 22px;">{value_str}</p>
+            <p style="margin: 0; font-weight: bold; font-size: 16px;">{icon} {signal.upper()}</p>
         </div>
         """
         
@@ -565,55 +576,6 @@ if ta_signals:
 else:
     st.warning("Not enough historical data to calculate indicators (min 52 bars). Try increasing the bar count or check data fetch status.")
 
-
-st.markdown("---")
-
-# --- 3. Simple Chart View (RSI & Close) - Kept for basic visualization ---
-st.header(f"3. Historical Chart View ({selected_timeframe_str} Bars)")
-
-if historical_df is not None and not historical_df.empty:
-    
-    # Calculate indicators again if needed for charting 
-    ta_df = historical_df.copy()
-    ta_df.ta.rsi(append=True)
-    
-    latest_rsi = ta_df['RSI_14'].iloc[-1]
-    latest_close = ta_df['Close'].iloc[-1]
-    
-    col_rsi, col_data_count, col_chart = st.columns([1, 1, 3])
-    
-    with col_rsi:
-        delta_color = "off"
-        if latest_rsi >= 70:
-            delta_color = "inverse" 
-        elif latest_rsi <= 30:
-            delta_color = "normal"  
-
-        st.metric(
-            label=f"Current RSI (14-period)",
-            value=f"{latest_rsi:,.2f}",
-            delta=f"Close: ${latest_close:,.2f}",
-            delta_color=delta_color
-        )
-        st.caption("RSI > 70 is Overbought. RSI < 30 is Oversold.")
-
-    with col_data_count:
-        st.metric(
-            label="Bars Analyzed",
-            value=f"{len(ta_df)}",
-            delta=f"Timeframe: {selected_timeframe_str}",
-            delta_color="off"
-        )
-        st.caption(f"Data ends at {ta_df.index[-1].tz_convert(UTC_PLUS_11).strftime('%Y-%m-%d %H:%M:%S')} (UTC+{UTC_OFFSET_HOURS})")
-
-
-    with col_chart:
-        # Include RSI and Close for the visualization
-        st.line_chart(ta_df[['Close', 'RSI_14']])
-        st.caption("The chart remains for visual confirmation of price and momentum.")
-    
-else:
-    st.warning(f"Could not load historical data for the selected parameters: {selected_timeframe_str}, {selected_bar_count} bars.")
 
 st.markdown("---")
 
@@ -681,7 +643,7 @@ else:
 
 st.markdown("---")
 
-# --- 3. Configuration and Details (Sidebar) ---
+# --- Configuration and Details (Sidebar) ---
 with st.sidebar:
     
     st.subheader("API Details & Debug")
