@@ -1,491 +1,729 @@
-# streamlit_app.py
-"""
-Multi-TF Crypto Dashboard (final)
-- Live Binance klines (1m,5m,15m,30m,1h,2h,4h,1d)
-- Top timeframe selector
-- Per-timeframe weights & tolerances in sidebar
-- Composite signals (Bullish/Neutral/Bearish)
-- Dedicated reversal detection boxes per timeframe with reasons
-- Mocked on-chain metrics (placeholder)
-- Robust handling of pandas_ta return shapes
-"""
 import streamlit as st
-import requests
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
-import plotly.graph_objects as go
+import requests
+import yfinance as yf
 from datetime import datetime, timedelta
-from typing import Dict
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import pandas_ta as ta
+import asyncio
+import aiohttp
+from textblob import TextBlob
+import tweepy
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import IsolationForest
+import warnings
+warnings.filterwarnings('ignore')
 
-st.set_page_config(layout="wide", page_title="Multi-TF Crypto Dashboard (Final)")
+# Page configuration
+st.set_page_config(
+    layout="wide", 
+    page_title="Crypto Alpha Dashboard",
+    page_icon="📊"
+)
 
-st.title("Multi-Timeframe Crypto Dashboard — Final")
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 4px solid #1f77b4;
+    }
+    .bullish {
+        background-color: #d4edda;
+        border-left: 4px solid #28a745;
+    }
+    .bearish {
+        background-color: #f8d7da;
+        border-left: 4px solid #dc3545;
+    }
+    .neutral {
+        background-color: #e2e3e5;
+        border-left: 4px solid #6c757d;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# ----------------------------
-# Constants
-# ----------------------------
-BINANCE_BASE = "https://api.binance.com/api/v3/klines"
-TF_LIST = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d']
-DEFAULT_SYMBOL = "BTCUSDT"
+st.markdown('<div class="main-header">🚀 Crypto Alpha Dashboard — Multi-Asset Analytics Platform</div>', unsafe_allow_html=True)
 
-# ----------------------------
-# Binance helper
-# ----------------------------
-@st.cache_data(ttl=20)
-def fetch_binance_klines(symbol: str, interval: str, limit: int = 800) -> pd.DataFrame:
-    params = {'symbol': symbol.upper(), 'interval': interval, 'limit': limit}
-    r = requests.get(BINANCE_BASE, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    if not data:
-        return pd.DataFrame()
-    df = pd.DataFrame(data, columns=[
-        "open_time","open","high","low","close","volume","close_time",
-        "quote_asset_volume","num_trades","taker_buy_base_vol","taker_buy_quote_vol","ignore"
-    ])
-    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-    df.set_index('open_time', inplace=True)
-    df = df[['open','high','low','close','volume']].astype(float)
-    df = df.rename(columns={'close':'price'})
-    return df
+# ---------------------------
+# --------- SETTINGS --------
+# ---------------------------
+# Enhanced indicator configuration
+INDICATOR_DEFAULTS = {
+    "EMA Cross": {"weight": 0.12, "neutral_tol": 0.002, "params": {"fast": 9, "slow": 21}},
+    "MACD": {"weight": 0.10, "neutral_tol": 0.0, "params": {"fast": 12, "slow": 26, "signal": 9}},
+    "RSI": {"weight": 0.08, "neutral_tol": (40, 60), "params": {"period": 14}},
+    "ADX": {"weight": 0.08, "neutral_tol": 20, "params": {"period": 14}},
+    "OBV": {"weight": 0.05, "neutral_tol": 0.005, "params": {}},
+    "SAR": {"weight": 0.05, "neutral_tol": 0.02, "params": {"af": 0.02, "max_af": 0.2}},
+    "VWAP": {"weight": 0.05, "neutral_tol": 0.002, "params": {}},
+    "ATR": {"weight": 0.04, "neutral_tol": 0.01, "params": {"period": 14}},
+    "Bollinger Bands": {"weight": 0.05, "neutral_tol": None, "params": {"period": 20, "std": 2}},
+    "Volume Oscillator": {"weight": 0.04, "neutral_tol": 0.005, "params": {"fast": 12, "slow": 26}},
+    "CMF": {"weight": 0.04, "neutral_tol": 0.05, "params": {"period": 20}},
+    "Ichimoku": {"weight": 0.08, "neutral_tol": None, "params": {}},
+    "Stochastic": {"weight": 0.06, "neutral_tol": (20, 80), "params": {"k": 14, "d": 3}},
+    "Netflow": {"weight": 0.08, "neutral_tol": 0.0, "params": {}},
+    "NUPL": {"weight": 0.08, "neutral_tol": (0.4, 0.6), "params": {}}
+}
 
-# ----------------------------
-# Mocked on-chain metrics
-# ----------------------------
-@st.cache_data(ttl=300)
-def fetch_mock_onchain(days=90):
-    dates = pd.date_range(end=datetime.utcnow(), periods=days, freq='D')
-    df = pd.DataFrame({
-        'date': dates,
-        'NUPL': np.random.uniform(0.2, 0.8, size=len(dates)),
-        'Supply_in_Profit_pct': np.random.uniform(50, 90, size=len(dates)),
-        'Miner_Netflow': np.random.uniform(-2000, 2000, size=len(dates)),
-        'Exchange_Netflow': np.random.uniform(-5000, 5000, size=len(dates)),
-        'Funding_Rate': np.random.uniform(-0.01, 0.01, size=len(dates))
-    })
-    df = df.set_index('date')
-    return df
+# Available assets and timeframes
+CRYPTO_ASSETS = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD", 
+    "ADA": "ADA-USD",
+    "DOT": "DOT-USD",
+    "SOL": "SOL-USD",
+    "MATIC": "MATIC-USD",
+    "AVAX": "AVAX-USD",
+    "LINK": "LINK-USD"
+}
 
-# ----------------------------
-# pandas_ta robust wrapper
-# ----------------------------
-def safe_series(fn, *args, prefer=None, **kwargs):
-    idx = None
-    if args and isinstance(args[0], (pd.Series, pd.DataFrame)):
-        idx = args[0].index
-    try:
-        res = fn(*args, **kwargs)
-        if isinstance(res, pd.Series):
-            return res.reindex(idx)
-        if isinstance(res, pd.DataFrame):
-            # prefer column name substring
-            if prefer:
-                for c in res.columns:
-                    if prefer.lower() in str(c).lower():
-                        return res[c].reindex(idx)
-            return res.iloc[:, 0].reindex(idx)
-        if isinstance(res, (list, np.ndarray)):
-            return pd.Series(res, index=idx)
-        return pd.Series([np.nan] * (len(idx) if idx is not None else 0), index=idx)
-    except Exception:
-        return pd.Series([np.nan] * (len(idx) if idx is not None else 0), index=idx)
+TF_OPTIONS = ["5m", "15m", "30m", "1h", "4h", "Daily", "Weekly"]
 
-# ----------------------------
-# Indicators computation
-# ----------------------------
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    out = df.copy()
-    price = out['price']
-    vol = out.get('volume', pd.Series(1, index=out.index))
+# ---------------------------
+# --------- SIDEBAR ---------
+# ---------------------------
+st.sidebar.header("🎛️ Dashboard Controls")
 
-    out['EMA9'] = safe_series(ta.ema, price, length=9)
-    out['EMA21'] = safe_series(ta.ema, price, length=21)
-    out['EMA50'] = safe_series(ta.ema, price, length=50)
-    out['EMA200'] = safe_series(ta.ema, price, length=200)
-    out['RSI'] = safe_series(ta.rsi, price, length=14)
+# Theme selector
+theme = st.sidebar.selectbox("Theme", ["Light", "Dark"], index=0)
 
-    # MACD: try to get both columns
-    try:
-        macd_df = ta.macd(price)
-        if isinstance(macd_df, pd.DataFrame) and not macd_df.empty:
-            out['MACD'] = macd_df.iloc[:,0].reindex(out.index)
-            out['MACD_signal'] = macd_df.iloc[:,1].reindex(out.index) if macd_df.shape[1] > 1 else safe_series(ta.ema, out['MACD'].fillna(method='ffill'), length=9)
-        else:
-            raise Exception("macd empty")
-    except Exception:
-        out['MACD'] = safe_series(ta.ema, price, length=12) - safe_series(ta.ema, price, length=26)
-        out['MACD_signal'] = safe_series(ta.ema, out['MACD'].fillna(method='ffill'), length=9)
+# Multi-asset selection
+st.sidebar.subheader("Asset Selection")
+selected_assets = st.sidebar.multiselect(
+    "Choose Assets", 
+    list(CRYPTO_ASSETS.keys()), 
+    default=["BTC", "ETH"]
+)
 
-    out['ATR'] = safe_series(ta.atr, price, price, price, length=14)
-    out['OBV'] = safe_series(ta.obv, price, vol)
+# Timeframe selection
+st.sidebar.subheader("Timeframe Configuration")
+selected_tfs = st.sidebar.multiselect(
+    "Select Timeframes", 
+    TF_OPTIONS, 
+    default=["1h", "4h", "Daily"]
+)
 
-    try:
-        adx_df = ta.adx(price, price, price, length=14)
-        if isinstance(adx_df, pd.DataFrame) and not adx_df.empty:
-            col = next((c for c in adx_df.columns if 'adx' in c.lower()), adx_df.columns[-1])
-            out['ADX'] = adx_df[col].reindex(out.index)
-        else:
-            out['ADX'] = np.nan
-    except Exception:
-        out['ADX'] = np.nan
+# Risk settings
+st.sidebar.subheader("Risk Management")
+risk_tolerance = st.sidebar.select_slider(
+    "Risk Tolerance", 
+    options=["Conservative", "Moderate", "Aggressive"],
+    value="Moderate"
+)
 
-    try:
-        sar = ta.sar(price, price)
-        if isinstance(sar, pd.Series):
-            out['SAR'] = sar.reindex(out.index)
-        elif isinstance(sar, pd.DataFrame) and not sar.empty:
-            out['SAR'] = sar.iloc[:,0].reindex(out.index)
-        else:
-            out['SAR'] = np.nan
-    except Exception:
-        out['SAR'] = np.nan
+enable_alerts = st.sidebar.checkbox("Enable Price Alerts", value=False)
+if enable_alerts:
+    alert_price = st.sidebar.number_input("Alert Price", value=0.0)
 
-    try:
-        pv = (price * vol).fillna(0).cumsum()
-        cv = vol.fillna(1).cumsum()
-        out['VWAP'] = (pv / cv).reindex(out.index)
-    except Exception:
-        out['VWAP'] = np.nan
+# ---------------------------
+# ----- INDICATOR CONTROLS ---
+# ---------------------------
+st.sidebar.header("📊 Indicator Configuration")
 
-    return out
-
-# ----------------------------
-# Per-timeframe default settings
-# ----------------------------
-def default_tf_settings():
-    return {
-        'weights': {'ema': 0.30, 'macd': 0.20, 'rsi': 0.15, 'adx': 0.05, 'obv': 0.05, 'nupl': 0.10, 'supply': 0.10},
-        'tolerances': {
-            'ema': 1.0, 'macd': 0.01, 'rsi_overbought':70, 'rsi_oversold':30,
-            'adx_strong':25, 'nupl_top':0.5, 'nupl_bottom':0.25, 'profit_top':80, 'profit_bottom':60,
-            'bull_thresh':0.3
-        }
+indicator_weights = {}
+for ind, config in INDICATOR_DEFAULTS.items():
+    st.sidebar.subheader(f"{ind}")
+    w = st.sidebar.slider(f"Weight", 0.0, 0.2, config["weight"], 0.01, key=f"weight_{ind}")
+    
+    # Parameter adjustments
+    if "period" in config["params"]:
+        period = st.sidebar.slider(f"Period", 5, 50, config["params"]["period"], key=f"period_{ind}")
+        config["params"]["period"] = period
+    
+    indicator_weights[ind] = {
+        "weight": w, 
+        "neutral_tol": config["neutral_tol"],
+        "params": config["params"]
     }
 
-if 'tf_settings' not in st.session_state:
-    st.session_state.tf_settings = {tf: default_tf_settings() for tf in TF_LIST}
-
-# ----------------------------
-# Top controls (timeframe selector + edit TF selector)
-# ----------------------------
-tf_container = st.container()
-with tf_container:
-    cols = st.columns([1,1,1,3])
-    main_tf = cols[0].selectbox("Main chart timeframe", TF_LIST, index=TF_LIST.index('2h'))
-    symbol = cols[1].text_input("Symbol (Binance)", value=DEFAULT_SYMBOL)
-    edit_tf = cols[2].selectbox("Edit controls for timeframe", TF_LIST, index=TF_LIST.index('2h'))
-    cols[3].markdown("Use 'Edit controls for timeframe' to tune weights & tolerances per timeframe.")
-
-# ----------------------------
-# Sidebar: per-timeframe weights & tolerances
-# ----------------------------
-st.sidebar.header("Per-timeframe Controls")
-st.sidebar.markdown(f"Editing controls for timeframe **{edit_tf}**")
-
-settings = st.session_state.tf_settings.get(edit_tf, default_tf_settings())
-w = settings['weights']
-t = settings['tolerances']
-
-st.sidebar.subheader("Weights")
-w['ema'] = st.sidebar.slider("EMA weight", 0.0, 1.0, float(w['ema']), 0.05, key=f"{edit_tf}_w_ema")
-w['macd'] = st.sidebar.slider("MACD weight", 0.0, 1.0, float(w['macd']), 0.05, key=f"{edit_tf}_w_macd")
-w['rsi'] = st.sidebar.slider("RSI weight", 0.0, 1.0, float(w['rsi']), 0.05, key=f"{edit_tf}_w_rsi")
-w['adx'] = st.sidebar.slider("ADX weight", 0.0, 1.0, float(w['adx']), 0.05, key=f"{edit_tf}_w_adx")
-w['obv'] = st.sidebar.slider("OBV weight", 0.0, 1.0, float(w['obv']), 0.05, key=f"{edit_tf}_w_obv")
-w['nupl'] = st.sidebar.slider("NUPL weight", 0.0, 1.0, float(w['nupl']), 0.05, key=f"{edit_tf}_w_nupl")
-w['supply'] = st.sidebar.slider("Supply weight", 0.0, 1.0, float(w['supply']), 0.05, key=f"{edit_tf}_w_supply")
-
-st.sidebar.subheader("Tolerances")
-t['ema'] = st.sidebar.slider("EMA sensitivity (price units)", 0.01, 20.0, float(t['ema']), 0.01, key=f"{edit_tf}_t_ema")
-t['macd'] = st.sidebar.slider("MACD threshold", 0.0005, 0.05, float(t['macd']), 0.0005, key=f"{edit_tf}_t_macd")
-t['rsi_overbought'] = st.sidebar.slider("RSI overbought", 55, 90, int(t['rsi_overbought']), key=f"{edit_tf}_t_rsi_high")
-t['rsi_oversold'] = st.sidebar.slider("RSI oversold", 10, 45, int(t['rsi_oversold']), key=f"{edit_tf}_t_rsi_low")
-t['adx_strong'] = st.sidebar.slider("ADX strong threshold", 10, 50, int(t['adx_strong']), key=f"{edit_tf}_t_adx")
-t['nupl_top'] = st.sidebar.slider("NUPL top", 0.3, 0.9, float(t['nupl_top']), 0.01, key=f"{edit_tf}_t_nupl_top")
-t['nupl_bottom'] = st.sidebar.slider("NUPL bottom", 0.01, 0.3, float(t['nupl_bottom']), 0.01, key=f"{edit_tf}_t_nupl_bot")
-t['profit_top'] = st.sidebar.slider("Supply profit high %", 60, 95, int(t['profit_top']), key=f"{edit_tf}_t_profit_top")
-t['profit_bottom'] = st.sidebar.slider("Supply profit low %", 10, 70, int(t['profit_bottom']), key=f"{edit_tf}_t_profit_bot")
-t['bull_thresh'] = st.sidebar.slider("Composite bull threshold", 0.1, 0.6, float(t['bull_thresh']), 0.01, key=f"{edit_tf}_t_bull_thresh")
-
-st.session_state.tf_settings[edit_tf] = {'weights': w, 'tolerances': t}
-
-# ----------------------------
-# Fetch data for all timeframes (cached)
-# ----------------------------
-st.info("Fetching live price data from Binance for all timeframes (cached).")
-
-tf_dfs = {}
-for tf in TF_LIST:
+# ---------------------------
+# ------- DATA FETCH --------
+# ---------------------------
+@st.cache_data(ttl=300, show_spinner="Fetching market data...")
+def fetch_crypto_data(symbol="BTC-USD", period="60d", interval="1h"):
+    """Fetch cryptocurrency data from Yahoo Finance"""
     try:
-        kdf = fetch_binance_klines(symbol, tf, limit=800)
-        kdf = compute_indicators(kdf)
-        tf_dfs[tf] = kdf
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period=period, interval=interval)
+        if data.empty:
+            return pd.DataFrame()
+        
+        data = data.reset_index()
+        data.columns = [col.lower() for col in data.columns]
+        return data[['datetime', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
-        tf_dfs[tf] = pd.DataFrame()
-        st.warning(f"Failed to fetch {tf}: {e}")
+        st.error(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()
 
-# mocked on-chain data
-onchain = fetch_mock_onchain()
+@st.cache_data(ttl=3600)
+def fetch_multiple_assets(assets, timeframe="1h"):
+    """Fetch data for multiple assets"""
+    data_dict = {}
+    for asset in assets:
+        symbol = CRYPTO_ASSETS[asset]
+        data = fetch_crypto_data(symbol, interval=timeframe)
+        if not data.empty:
+            data_dict[asset] = data
+    return data_dict
 
-# ----------------------------
-# Evaluate composite signal + reversal detection per TF
-# ----------------------------
-def evaluate_tf(df: pd.DataFrame, tf: str):
+@st.cache_data(ttl=1800)
+def fetch_market_sentiment():
+    """Fetch general market sentiment indicators"""
+    try:
+        # Mock sentiment data - replace with actual API calls
+        sentiment_data = {
+            "fear_greed": np.random.randint(0, 100),
+            "social_volume": np.random.randint(1000, 50000),
+            "weighted_sentiment": np.random.uniform(-1, 1)
+        }
+        return sentiment_data
+    except:
+        return None
+
+# ---------------------------
+# ---- ENHANCED INDICATORS ---
+# ---------------------------
+def compute_enhanced_indicators(df, params):
+    """Compute technical indicators with customizable parameters"""
     if df.empty:
-        return {'label':'Neutral','score':0.0,'breakdown':{}, 'latest':pd.Series(), 'reversal':False, 'reversal_reasons':[]}
-    latest = df.iloc[-1]
-    settings = st.session_state.tf_settings.get(tf, default_tf_settings())
-    weights = settings['weights']; tol = settings['tolerances']
-
-    score = 0.0; total_w = 0.0; breakdown = {}
-
-    def push(name, sig, w, reason):
-        nonlocal score, total_w, breakdown
-        breakdown[name] = (sig, reason)
-        if sig is None:
-            return
-        score += w * sig
-        total_w += w
-
-    # EMA cross
-    ema9 = latest.get('EMA9', np.nan); ema21 = latest.get('EMA21', np.nan)
-    if pd.notna(ema9) and pd.notna(ema21):
-        diff = ema9 - ema21
-        if diff > tol['ema']: push('EMA_cross', 1, weights['ema'], f"EMA9>EMA21 by {diff:.3f}")
-        elif diff < -tol['ema']: push('EMA_cross', -1, weights['ema'], f"EMA9<EMA21 by {diff:.3f}")
-        else: push('EMA_cross', 0, weights['ema'], f"EMA diff {diff:.3f}")
-    else:
-        push('EMA_cross', None, weights['ema'], "missing")
-
+        return df
+    
+    df = df.copy()
+    
+    # EMAs with customizable periods
+    ema_fast = params["EMA Cross"]["params"]["fast"]
+    ema_slow = params["EMA Cross"]["params"]["slow"]
+    df[f"EMA{ema_fast}"] = df["close"].ewm(span=ema_fast, adjust=False).mean()
+    df[f"EMA{ema_slow}"] = df["close"].ewm(span=ema_slow, adjust=False).mean()
+    
     # MACD
-    macd = latest.get('MACD', np.nan); macds = latest.get('MACD_signal', np.nan)
-    if pd.notna(macd) and pd.notna(macds):
-        d = macd - macds
-        if d > tol['macd']: push('MACD', 1, weights['macd'], f"MACD diff {d:.4f}")
-        elif d < -tol['macd']: push('MACD', -1, weights['macd'], f"MACD diff {d:.4f}")
-        else: push('MACD', 0, weights['macd'], f"MACD neutral {d:.4f}")
-    else:
-        push('MACD', None, weights['macd'], "missing")
-
+    macd_params = params["MACD"]["params"]
+    macd = ta.macd(df["close"], **macd_params)
+    df["MACD"] = macd[f"MACD_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
+    df["MACD_Signal"] = macd[f"MACDs_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
+    df["MACD_Histogram"] = macd[f"MACDh_{macd_params['fast']}_{macd_params['slow']}_{macd_params['signal']}"]
+    
     # RSI
-    rsi = latest.get('RSI', np.nan)
-    if pd.notna(rsi):
-        if rsi >= tol['rsi_overbought']: push('RSI', -1, weights['rsi'], f"RSI {rsi:.1f} overbought")
-        elif rsi <= tol['rsi_oversold']: push('RSI', 1, weights['rsi'], f"RSI {rsi:.1f} oversold")
-        else: push('RSI', 0, weights['rsi'], f"RSI {rsi:.1f} neutral")
+    rsi_period = params["RSI"]["params"]["period"]
+    df["RSI"] = ta.rsi(df["close"], length=rsi_period)
+    
+    # Bollinger Bands
+    bb_params = params["Bollinger Bands"]["params"]
+    bbands = ta.bbands(df["close"], length=bb_params["period"], std=bb_params["std"])
+    df["BB_upper"] = bbands[f"BBU_{bb_params['period']}_{bb_params['std']}.0"]
+    df["BB_lower"] = bbands[f"BBL_{bb_params['period']}_{bb_params['std']}.0"]
+    df["BB_middle"] = bbands[f"BBM_{bb_params['period']}_{bb_params['std']}.0"]
+    
+    # Stochastic
+    stoch_params = params["Stochastic"]["params"]
+    stoch = ta.stoch(df["high"], df["low"], df["close"], **stoch_params)
+    df["Stoch_K"] = stoch[f"STOCHk_{stoch_params['k']}_{stoch_params['d']}"]
+    df["Stoch_D"] = stoch[f"STOCHd_{stoch_params['k']}_{stoch_params['d']}"]
+    
+    # Ichimoku Cloud
+    ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+    df["Ichimoku_Base"] = ichimoku["its_26"]
+    df["Ichimoku_Conversion"] = ichimoku["ita_9"]
+    df["Ichimoku_Span_A"] = ichimoku["isa_9"]
+    df["Ichimoku_Span_B"] = ichimoku["isb_26"]
+    
+    # Additional indicators
+    df["ADX"] = ta.adx(df["high"], df["low"], df["close"])["ADX_14"]
+    df["OBV"] = ta.obv(df["close"], df["volume"])
+    df["ATR"] = ta.atr(df["high"], df["low"], df["close"])
+    df["CMF"] = ta.cmf(df["high"], df["low"], df["close"], df["volume"])
+    df["VWAP"] = (df["volume"] * (df["high"] + df["low"] + df["close"])/3).cumsum() / df["volume"].cumsum()
+    
+    # Volume indicators
+    vo_params = params["Volume Oscillator"]["params"]
+    df["VO"] = ta.pvo(df["volume"], **vo_params)["PVO_12_26_9"]
+    
+    return df
+
+# ---------------------------
+# ---- ADVANCED ANALYTICS ---
+# ---------------------------
+def detect_market_regime(df):
+    """Detect market regime using volatility and trend analysis"""
+    if len(df) < 50:
+        return "Unknown"
+    
+    returns = df["close"].pct_change().dropna()
+    volatility = returns.rolling(window=20).std()
+    
+    avg_volatility = volatility.mean()
+    current_vol = volatility.iloc[-1]
+    
+    if current_vol > avg_volatility * 1.5:
+        return "High Volatility"
+    elif current_vol < avg_volatility * 0.5:
+        return "Low Volatility"
     else:
-        push('RSI', None, weights['rsi'], "missing")
+        return "Normal"
 
-    # ADX (trend strength)
-    adx = latest.get('ADX', np.nan); ema50 = latest.get('EMA50', np.nan); price = latest.get('price', np.nan)
-    if pd.notna(adx):
-        if adx >= tol['adx_strong']:
-            if pd.notna(price) and pd.notna(ema50):
-                push('ADX', 1 if price > ema50 else -1, weights['adx'], f"ADX {adx:.1f} strong")
-            else:
-                push('ADX', 0, weights['adx'], f"ADX {adx:.1f} strong")
-        else:
-            push('ADX', 0, weights['adx'], f"ADX {adx:.1f} weak")
+def calculate_risk_metrics(df):
+    """Calculate comprehensive risk metrics"""
+    if len(df) < 20:
+        return {}
+    
+    returns = df["close"].pct_change().dropna()
+    
+    metrics = {
+        "volatility": returns.std() * np.sqrt(365),  # Annualized
+        "sharpe_ratio": returns.mean() / returns.std() * np.sqrt(365) if returns.std() > 0 else 0,
+        "max_drawdown": (df["close"] / df["close"].cummax() - 1).min(),
+        "var_95": returns.quantile(0.05),
+        "current_momentum": (df["close"].iloc[-1] / df["close"].iloc[-10] - 1) if len(df) >= 10 else 0
+    }
+    
+    return metrics
+
+# ---------------------------
+# ---- SIGNAL GENERATION ----
+# ---------------------------
+def generate_trading_signals(df, weights):
+    """Generate comprehensive trading signals"""
+    if df.empty:
+        return {}
+    
+    last = df.iloc[-1]
+    signals = {}
+    
+    # EMA Cross Signal
+    ema_fast = weights["EMA Cross"]["params"]["fast"]
+    ema_slow = weights["EMA Cross"]["params"]["slow"]
+    fast_ema = last[f"EMA{ema_fast}"]
+    slow_ema = last[f"EMA{ema_slow}"]
+    
+    if fast_ema > slow_ema * (1 + weights["EMA Cross"]["neutral_tol"]):
+        signals["EMA Cross"] = ("Bullish", f"EMA{ema_fast} > EMA{ema_slow}")
+    elif fast_ema < slow_ema * (1 - weights["EMA Cross"]["neutral_tol"]):
+        signals["EMA Cross"] = ("Bearish", f"EMA{ema_fast} < EMA{ema_slow}")
     else:
-        push('ADX', None, weights['adx'], "missing")
-
-    # OBV stub
-    obv = latest.get('OBV', np.nan)
-    push('OBV', 0 if pd.notna(obv) else None, weights['obv'], "OBV snapshot")
-
-    # on-chain (daily mocked)
-    try:
-        chain_latest = onchain.iloc[-1]
-    except Exception:
-        chain_latest = pd.Series()
-    nupl = chain_latest.get('NUPL', np.nan)
-    if pd.notna(nupl):
-        if nupl >= tol['nupl_top']: push('NUPL', -1, weights['nupl'], f"NUPL {nupl:.2f} high")
-        elif nupl <= tol['nupl_bottom']: push('NUPL', 1, weights['nupl'], f"NUPL {nupl:.2f} low")
-        else: push('NUPL', 0, weights['nupl'], f"NUPL {nupl:.2f}")
+        signals["EMA Cross"] = ("Neutral", "EMAs converging")
+    
+    # RSI Signal
+    rsi = last["RSI"]
+    rsi_tol = weights["RSI"]["neutral_tol"]
+    if rsi_tol[0] <= rsi <= rsi_tol[1]:
+        signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
+    elif rsi > 70:
+        signals["RSI"] = ("Bearish", f"Overbought {rsi:.1f}")
+    elif rsi < 30:
+        signals["RSI"] = ("Bullish", f"Oversold {rsi:.1f}")
     else:
-        push('NUPL', None, weights['nupl'], "missing")
-
-    supply = chain_latest.get('Supply_in_Profit_pct', np.nan)
-    if pd.notna(supply):
-        if supply >= tol['profit_top']: push('Supply_in_Profit_pct', -1, weights['supply'], f"{supply:.1f}% high")
-        elif supply <= tol['profit_bottom']: push('Supply_in_Profit_pct', 1, weights['supply'], f"{supply:.1f}% low")
-        else: push('Supply_in_Profit_pct', 0, weights['supply'], f"{supply:.1f}%")
+        signals["RSI"] = ("Neutral", f"RSI {rsi:.1f}")
+    
+    # MACD Signal
+    macd = last["MACD"]
+    macd_signal = last["MACD_Signal"]
+    if macd > macd_signal:
+        signals["MACD"] = ("Bullish", f"MACD {macd:.3f} > Signal {macd_signal:.3f}")
     else:
-        push('Supply_in_Profit_pct', None, weights['supply'], "missing")
-
-    final_score = (score / total_w) if total_w > 0 else 0.0
-    label = 'Neutral'
-    if final_score >= tol['bull_thresh']: label = 'Bullish'
-    elif final_score <= -tol['bull_thresh']: label = 'Bearish'
-
-    # Reversal detection (EMA cross / MACD cross / RSI flip within last N candles)
-    reversal = False; rev_reasons = []
-    try:
-        recent = df[['EMA9','EMA21','MACD','MACD_signal','RSI']].dropna().tail(6)
-        if len(recent) >= 3:
-            # EMA cross detection
-            s = np.sign(recent['EMA9'] - recent['EMA21'])
-            if len(np.unique(s)) > 1 and s.iloc[-1] != s.iloc[-2]:
-                reversal = True; rev_reasons.append("Recent EMA cross")
-            # MACD cross detection
-            m = np.sign(recent['MACD'] - recent['MACD_signal'])
-            if len(np.unique(m)) > 1 and m.iloc[-1] != m.iloc[-2]:
-                reversal = True; rev_reasons.append("Recent MACD cross")
-            # RSI flip
-            r = recent['RSI']
-            if (r.iloc[-2] >= tol['rsi_overbought'] and r.iloc[-1] < tol['rsi_overbought']) or (r.iloc[-2] <= tol['rsi_oversold'] and r.iloc[-1] > tol['rsi_oversold']):
-                reversal = True; rev_reasons.append("RSI flip")
-    except Exception:
-        pass
-
-    # primary reason
-    primary = next((f"{k}: {v[1]}" for k, v in breakdown.items() if v[1] not in ("missing","N/A")), "No strong signals")
-
-    return {'label': label, 'score': final_score, 'breakdown': breakdown, 'latest': latest, 'reversal': reversal, 'reversal_reasons': rev_reasons, 'primary': primary}
-
-# compute for all TFs
-tf_results = {tf: evaluate_tf(tf_dfs.get(tf, pd.DataFrame()), tf) for tf in TF_LIST}
-
-# ----------------------------
-# Main chart for selected timeframe
-# ----------------------------
-st.subheader(f"{symbol} — Price ({main_tf})")
-main_df = tf_dfs.get(main_tf, pd.DataFrame())
-if main_df.empty:
-    st.error("No data for this symbol/timeframe.")
-else:
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=main_df.index, y=main_df['price'], mode='lines', name='Price'))
-    if 'EMA9' in main_df.columns: fig.add_trace(go.Scatter(x=main_df.index, y=main_df['EMA9'], mode='lines', name='EMA9', line=dict(width=1)))
-    if 'EMA21' in main_df.columns: fig.add_trace(go.Scatter(x=main_df.index, y=main_df['EMA21'], mode='lines', name='EMA21', line=dict(width=1)))
-    fig.update_layout(height=520, margin=dict(l=20,r=20,t=30,b=10))
-    st.plotly_chart(fig, use_container_width=True)
-
-# ----------------------------
-# Multi-TF cards
-# ----------------------------
-st.subheader("Multi-timeframe Overview")
-cards_per_row = 4
-rows = (len(TF_LIST) + cards_per_row - 1) // cards_per_row
-for r in range(rows):
-    start = r * cards_per_row
-    end = min(start + cards_per_row, len(TF_LIST))
-    cols = st.columns(end - start, gap="large")
-    for i, tf in enumerate(TF_LIST[start:end]):
-        res = tf_results[tf]
-        label = res['label']; score = res['score']; latest = res['latest']
-        color = "#D3D3D3"
-        if label == 'Bullish': color = "#2ECC71"
-        elif label == 'Bearish': color = "#E74C3C"
-        display = f"{latest['price']:.2f}" if isinstance(latest, pd.Series) and 'price' in latest and pd.notna(latest['price']) else f"score {score:.2f}"
-        reason = res.get('primary','')
-        cols[i].markdown(
-            f"""
-            <div style="background:{color};padding:14px;border-radius:10px;min-height:110px;">
-              <div style="font-weight:800;font-size:15px">{tf} — {label}</div>
-              <div style="font-size:20px;font-weight:800;margin-top:8px">{display}</div>
-              <div style="font-size:12px;margin-top:8px;opacity:0.95">{reason}</div>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-# ----------------------------
-# Reversal boxes (explicit)
-# ----------------------------
-st.subheader("Reversal Signals (explicit)")
-cols = st.columns(len(TF_LIST), gap="large")
-for i, tf in enumerate(TF_LIST):
-    res = tf_results[tf]
-    rev = res['reversal']; reasons = res['reversal_reasons']
-    if rev:
-        color = "#F39C12"  # orange for 'possible reversal' (distinct from bull/red)
-        label = "Potential Reversal"
-        reason_text = "; ".join(reasons) if reasons else res.get('primary','')
+        signals["MACD"] = ("Bearish", f"MACD {macd:.3f} < Signal {macd_signal:.3f}")
+    
+    # Bollinger Bands Signal
+    price = last["close"]
+    bb_upper = last["BB_upper"]
+    bb_lower = last["BB_lower"]
+    if price <= bb_lower:
+        signals["Bollinger Bands"] = ("Bullish", "Price at lower band")
+    elif price >= bb_upper:
+        signals["Bollinger Bands"] = ("Bearish", "Price at upper band")
     else:
-        color = "#D3D3D3"
-        label = "No reversal"
-        reason_text = res.get('primary','')
-    cols[i].markdown(
-        f"""
-        <div style="background:{color};padding:12px;border-radius:8px;text-align:center;min-height:80px;">
-          <div style="font-weight:700">{tf}</div>
-          <div style="font-size:16px;margin-top:6px">{label}</div>
-          <div style="font-size:12px;margin-top:6px;opacity:0.95">{reason_text}</div>
-        </div>
-        """, unsafe_allow_html=True
+        signals["Bollinger Bands"] = ("Neutral", "Price within bands")
+    
+    # Stochastic Signal
+    stoch_k = last["Stoch_K"]
+    stoch_d = last["Stoch_D"]
+    stoch_tol = weights["Stochastic"]["neutral_tol"]
+    if stoch_k < stoch_tol[0] and stoch_d < stoch_tol[0]:
+        signals["Stochastic"] = ("Bullish", f"Oversold K:{stoch_k:.1f} D:{stoch_d:.1f}")
+    elif stoch_k > stoch_tol[1] and stoch_d > stoch_tol[1]:
+        signals["Stochastic"] = ("Bearish", f"Overbought K:{stoch_k:.1f} D:{stoch_d:.1f}")
+    else:
+        signals["Stochastic"] = ("Neutral", f"K:{stoch_k:.1f} D:{stoch_d:.1f}")
+    
+    # Ichimoku Signal
+    price = last["close"]
+    span_a = last["Ichimoku_Span_A"]
+    span_b = last["Ichimoku_Span_B"]
+    if price > span_a and price > span_b and span_a > span_b:
+        signals["Ichimoku"] = ("Bullish", "Strong uptrend")
+    elif price < span_a and price < span_b and span_a < span_b:
+        signals["Ichimoku"] = ("Bearish", "Strong downtrend")
+    else:
+        signals["Ichimoku"] = ("Neutral", "Consolidation")
+    
+    return signals
+
+def calculate_combined_score(signals, weights):
+    """Calculate overall sentiment score"""
+    score_map = {"Bullish": 1, "Neutral": 0, "Bearish": -1}
+    total_weight = 0
+    weighted_score = 0
+    
+    for indicator, signal in signals.items():
+        if indicator in weights:
+            weight = weights[indicator]["weight"]
+            score = score_map[signal[0]]
+            weighted_score += score * weight
+            total_weight += weight
+    
+    if total_weight > 0:
+        final_score = weighted_score / total_weight
+    else:
+        final_score = 0
+    
+    # Convert to sentiment
+    if final_score > 0.1:
+        return "Bullish", final_score
+    elif final_score < -0.1:
+        return "Bearish", final_score
+    else:
+        return "Neutral", final_score
+
+# ---------------------------
+# ----- VISUALIZATION -------
+# ---------------------------
+def create_enhanced_chart(df, asset, timeframe, signals):
+    """Create comprehensive trading chart"""
+    if df.empty:
+        return go.Figure()
+    
+    # Create subplots
+    fig = make_subplots(
+        rows=4, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=(
+            f'{asset} Price Chart - {timeframe}',
+            'Volume',
+            'RSI & Stochastic',
+            'MACD'
+        ),
+        row_heights=[0.5, 0.15, 0.15, 0.2]
     )
+    
+    # Price data
+    fig.add_trace(
+        go.Candlestick(
+            x=df['datetime'],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name='Price'
+        ), row=1, col=1
+    )
+    
+    # EMAs
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['EMA9'], name='EMA9', line=dict(color='blue')),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['EMA21'], name='EMA21', line=dict(color='orange')),
+        row=1, col=1
+    )
+    
+    # Bollinger Bands
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['BB_upper'], name='BB Upper', 
+                  line=dict(color='gray', dash='dash'), opacity=0.7),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['BB_lower'], name='BB Lower', 
+                  line=dict(color='gray', dash='dash'), opacity=0.7),
+        row=1, col=1
+    )
+    
+    # Volume
+    colors = ['red' if row['close'] < row['open'] else 'green' for _, row in df.iterrows()]
+    fig.add_trace(
+        go.Bar(x=df['datetime'], y=df['volume'], name='Volume', marker_color=colors),
+        row=2, col=1
+    )
+    
+    # RSI
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')),
+        row=3, col=1
+    )
+    # RSI levels
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+    fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
+    
+    # Stochastic
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['Stoch_K'], name='Stoch %K', line=dict(color='blue')),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['Stoch_D'], name='Stoch %D', line=dict(color='red')),
+        row=3, col=1
+    )
+    
+    # MACD
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')),
+        row=4, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df['datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')),
+        row=4, col=1
+    )
+    # MACD Histogram
+    colors_macd = ['red' if x < 0 else 'green' for x in df['MACD_Histogram']]
+    fig.add_trace(
+        go.Bar(x=df['datetime'], y=df['MACD_Histogram'], name='MACD Histogram', 
+               marker_color=colors_macd, opacity=0.6),
+        row=4, col=1
+    )
+    
+    fig.update_layout(
+        height=800,
+        showlegend=True,
+        xaxis_rangeslider_visible=False,
+        title=f"Technical Analysis - {asset} ({timeframe})"
+    )
+    
+    return fig
 
-# ----------------------------
-# On-chain static boxes
-# ----------------------------
-st.subheader("On-chain (static demo)")
-chain_row = onchain.iloc[-1] if not onchain.empty else pd.Series()
-onchain_metrics = [
-    ('NUPL', chain_row.get('NUPL', np.nan)),
-    ('Supply_in_Profit_pct', chain_row.get('Supply_in_Profit_pct', np.nan)),
-    ('Miner_Netflow', chain_row.get('Miner_Netflow', np.nan)),
-    ('Exchange_Netflow', chain_row.get('Exchange_Netflow', np.nan)),
-    ('Funding_Rate', chain_row.get('Funding_Rate', np.nan)),
-]
-per_row = 3
-rows = (len(onchain_metrics) + per_row - 1) // per_row
-for r in range(rows):
-    start = r * per_row
-    end = min(start + per_row, len(onchain_metrics))
-    cols = st.columns(end - start, gap="large")
-    for i, (name, val) in enumerate(onchain_metrics[start:end]):
-        if pd.isna(val):
-            color = "#D3D3D3"; text = "Unavailable"
-        else:
-            if name == 'NUPL':
-                if val >= st.session_state.tf_settings[main_tf]['tolerances']['nupl_top']:
-                    color = "#E74C3C"; text = f"NUPL {val:.2f} (high)"
-                elif val <= st.session_state.tf_settings[main_tf]['tolerances']['nupl_bottom']:
-                    color = "#2ECC71"; text = f"NUPL {val:.2f} (low)"
+# ---------------------------
+# ----- MAIN DASHBOARD ------
+# ---------------------------
+def main():
+    # Market Overview Section
+    st.header("📈 Market Overview")
+    
+    # Fetch data for all selected assets
+    if not selected_assets:
+        st.warning("Please select at least one asset from the sidebar.")
+        return
+    
+    # Initialize session state for data
+    if 'market_data' not in st.session_state:
+        st.session_state.market_data = {}
+    
+    # Data loading
+    with st.spinner("Loading market data..."):
+        for tf in selected_tfs:
+            if tf not in st.session_state.market_data:
+                st.session_state.market_data[tf] = fetch_multiple_assets(selected_assets, tf)
+    
+    # Market Overview Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Selected Assets", len(selected_assets))
+    
+    with col2:
+        st.metric("Timeframes Analyzed", len(selected_tfs))
+    
+    with col3:
+        st.metric("Risk Profile", risk_tolerance)
+    
+    with col4:
+        sentiment_data = fetch_market_sentiment()
+        if sentiment_data:
+            st.metric("Market Sentiment", f"{'Bullish' if sentiment_data['weighted_sentiment'] > 0 else 'Bearish'}")
+    
+    # Multi-Timeframe Analysis
+    st.header("⏰ Multi-Timeframe Analysis")
+    
+    for asset in selected_assets:
+        st.subheader(f"🔍 {asset} Analysis")
+        
+        asset_cols = st.columns(len(selected_tfs))
+        
+        for idx, tf in enumerate(selected_tfs):
+            with asset_cols[idx]:
+                if asset in st.session_state.market_data[tf]:
+                    df = st.session_state.market_data[tf][asset]
+                    if not df.empty:
+                        # Compute indicators
+                        df_indicators = compute_enhanced_indicators(df, indicator_weights)
+                        
+                        # Generate signals
+                        signals = generate_trading_signals(df_indicators, indicator_weights)
+                        
+                        # Calculate combined score
+                        overall_sentiment, score = calculate_combined_score(signals, indicator_weights)
+                        
+                        # Display timeframe card
+                        sentiment_color = {
+                            "Bullish": "bullish",
+                            "Bearish": "bearish", 
+                            "Neutral": "neutral"
+                        }[overall_sentiment]
+                        
+                        st.markdown(
+                            f"""
+                            <div class='metric-card {sentiment_color}'>
+                                <h4>{tf}</h4>
+                                <h3>{overall_sentiment}</h3>
+                                <p>Score: {score:.2f}</p>
+                                <p>Price: ${df_indicators['close'].iloc[-1]:.2f}</p>
+                            </div>
+                            """, 
+                            unsafe_allow_html=True
+                        )
+        
+        # Detailed analysis for the asset
+        with st.expander(f"Detailed Analysis for {asset}", expanded=False):
+            selected_tf_detail = st.selectbox(
+                f"Select timeframe for detailed chart", 
+                selected_tfs, 
+                key=f"detail_{asset}"
+            )
+            
+            if asset in st.session_state.market_data[selected_tf_detail]:
+                df_detail = st.session_state.market_data[selected_tf_detail][asset]
+                if not df_detail.empty:
+                    df_indicators_detail = compute_enhanced_indicators(df_detail, indicator_weights)
+                    signals_detail = generate_trading_signals(df_indicators_detail, indicator_weights)
+                    
+                    # Display chart
+                    fig = create_enhanced_chart(df_indicators_detail, asset, selected_tf_detail, signals_detail)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Risk metrics
+                    risk_metrics = calculate_risk_metrics(df_detail)
+                    regime = detect_market_regime(df_detail)
+                    
+                    # Display metrics
+                    metric_cols = st.columns(4)
+                    with metric_cols[0]:
+                        st.metric("Volatility", f"{risk_metrics.get('volatility', 0):.2%}")
+                    with metric_cols[1]:
+                        st.metric("Sharpe Ratio", f"{risk_metrics.get('sharpe_ratio', 0):.2f}")
+                    with metric_cols[2]:
+                        st.metric("Max Drawdown", f"{risk_metrics.get('max_drawdown', 0):.2%}")
+                    with metric_cols[3]:
+                        st.metric("Market Regime", regime)
+                    
+                    # Signals table
+                    st.subheader("📊 Signal Breakdown")
+                    signals_df = pd.DataFrame([
+                        {"Indicator": ind, "Signal": sig[0], "Reason": sig[1]} 
+                        for ind, sig in signals_detail.items()
+                    ])
+                    st.dataframe(signals_df, use_container_width=True)
+    
+    # Correlation Analysis
+    if len(selected_assets) > 1:
+        st.header("🔄 Correlation Analysis")
+        
+        # Calculate correlations
+        correlation_data = []
+        for tf in selected_tfs[:1]:  # Use first timeframe for correlation
+            prices = {}
+            for asset in selected_assets:
+                if asset in st.session_state.market_data[tf]:
+                    df = st.session_state.market_data[tf][asset]
+                    if not df.empty and len(df) > 10:
+                        prices[asset] = df['close'].pct_change().dropna()
+            
+            if len(prices) > 1:
+                corr_df = pd.DataFrame(prices).corr()
+                
+                # Plot correlation heatmap
+                fig_corr = px.imshow(
+                    corr_df,
+                    text_auto=True,
+                    aspect="auto",
+                    color_continuous_scale="RdBu_r",
+                    title=f"Asset Correlation Matrix ({tf})"
+                )
+                st.plotly_chart(fig_corr, use_container_width=True)
+                break
+    
+    # Trading Insights
+    st.header("💡 Trading Insights")
+    
+    insight_col1, insight_col2 = st.columns(2)
+    
+    with insight_col1:
+        st.subheader("Strategy Suggestions")
+        
+        # Generate basic strategy suggestions based on signals
+        for asset in selected_assets[:3]:  # Limit to first 3 assets
+            all_tf_signals = []
+            for tf in selected_tfs:
+                if asset in st.session_state.market_data[tf]:
+                    df = st.session_state.market_data[tf][asset]
+                    if not df.empty:
+                        df_indicators = compute_enhanced_indicators(df, indicator_weights)
+                        signals = generate_trading_signals(df_indicators, indicator_weights)
+                        sentiment, score = calculate_combined_score(signals, indicator_weights)
+                        all_tf_signals.append((tf, sentiment, score))
+            
+            if all_tf_signals:
+                bullish_count = sum(1 for _, sentiment, _ in all_tf_signals if sentiment == "Bullish")
+                total_count = len(all_tf_signals)
+                
+                if bullish_count == total_count:
+                    suggestion = "🟢 Strong Buy - Bullish across all timeframes"
+                elif bullish_count >= total_count * 0.7:
+                    suggestion = "🟡 Cautious Buy - Mostly bullish"
+                elif bullish_count <= total_count * 0.3:
+                    suggestion = "🔴 Consider Sell - Mostly bearish"
                 else:
-                    color = "#D3D3D3"; text = f"NUPL {val:.2f} neutral"
-            elif name == 'Supply_in_Profit_pct':
-                if val >= st.session_state.tf_settings[main_tf]['tolerances']['profit_top']:
-                    color = "#E74C3C"; text = f"{val:.1f}% (high)"
-                elif val <= st.session_state.tf_settings[main_tf]['tolerances']['profit_bottom']:
-                    color = "#2ECC71"; text = f"{val:.1f}% (low)"
-                else:
-                    color = "#D3D3D3"; text = f"{val:.1f}% (neutral)"
-            elif name in ('Miner_Netflow','Exchange_Netflow'):
-                if val > 0:
-                    color = "#E74C3C"; text = f"{val:.0f} inflow (selling)"
-                elif val < 0:
-                    color = "#2ECC71"; text = f"{abs(val):.0f} outflow (buying)"
-                else:
-                    color = "#D3D3D3"; text = "neutral"
-            else:
-                color = "#D3D3D3"; text = f"{val:.4f}"
-        cols[i].markdown(
-            f"""<div style="background:{color};padding:12px;border-radius:10px;text-align:center;min-height:90px">
-                <div style="font-weight:700">{name}</div>
-                <div style="font-size:18px;margin-top:6px">{'' if pd.isna(val) else f'{val:.3f}'}</div>
-                <div style="font-size:12px;opacity:0.9;margin-top:6px">{text}</div>
-               </div>""", unsafe_allow_html=True
-        )
+                    suggestion = "⚪ Hold - Mixed signals"
+                
+                st.write(f"**{asset}**: {suggestion}")
+    
+    with insight_col2:
+        st.subheader("Risk Assessment")
+        
+        # Display risk warnings
+        for asset in selected_assets[:2]:
+            for tf in selected_tfs[-1:]:  # Use highest timeframe for risk assessment
+                if asset in st.session_state.market_data[tf]:
+                    df = st.session_state.market_data[tf][asset]
+                    if not df.empty and len(df) > 20:
+                        risk_metrics = calculate_risk_metrics(df)
+                        volatility = risk_metrics.get('volatility', 0)
+                        
+                        if volatility > 0.8:
+                            st.warning(f"🚨 {asset}: High volatility detected ({volatility:.1%})")
+                        elif volatility > 0.5:
+                            st.info(f"⚠️ {asset}: Elevated volatility ({volatility:.1%})")
+                        else:
+                            st.success(f"✅ {asset}: Normal volatility ({volatility:.1%})")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    ### 📚 How to Use This Dashboard
+    
+    1. **Asset Selection**: Choose cryptocurrencies from the sidebar
+    2. **Timeframe Analysis**: View multiple timeframes simultaneously
+    3. **Indicator Configuration**: Adjust weights and parameters in sidebar
+    4. **Risk Management**: Set your risk tolerance level
+    5. **Signal Interpretation**: 
+       - 🟢 Bullish: Favorable buying conditions
+       - 🔴 Bearish: Consider selling or shorting
+       - ⚪ Neutral: Wait for clearer signals
+    
+    **Disclaimer**: This tool is for educational purposes only. Always do your own research and consider consulting with a qualified financial advisor before making investment decisions.
+    """)
 
-# ----------------------------
-# Forecast placeholder for main_tf
-# ----------------------------
-st.subheader(f"30-day simple forecast (placeholder) — {main_tf}")
-main_latest = tf_dfs.get(main_tf, pd.DataFrame()).iloc[-1] if not tf_dfs.get(main_tf, pd.DataFrame()).empty else pd.Series()
-last_price = main_latest.get('price', np.nan)
-if pd.isna(last_price):
-    st.info("No price available for forecast.")
-else:
-    days = 30
-    rng = np.random.default_rng(seed=42)
-    shocks = rng.normal(loc=0.0, scale=0.01, size=days)
-    prices = [last_price]
-    for s in shocks:
-        prices.append(prices[-1] * (1 + s))
-    fc = pd.DataFrame({'date':[datetime.utcnow().date() + timedelta(days=i) for i in range(1, days+1)], 'price': prices[1:]})
-    st.line_chart(fc.set_index('date')['price'])
+if __name__ == "__main__":
+    main()
