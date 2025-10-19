@@ -783,7 +783,7 @@ def main():
     
     # Footer
     st.markdown("---")
-    st.markdown("""
+    st.markdown(""")
     ### 📚 How to Use This Dashboard
     
     1. **Asset Selection**: Choose cryptocurrencies from the sidebar
@@ -803,3 +803,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+        """)
