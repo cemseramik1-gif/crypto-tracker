@@ -22,14 +22,13 @@ KRAKEN_API_URL = "https://api.kraken.com"
 KRAKEN_TICKER_ENDPOINT = f"{KRAKEN_API_URL}/0/public/Ticker?pair=XBTUSD" 
 KRAKEN_OHLC_ENDPOINT = f"{KRAKEN_API_URL}/0/public/OHLC"
 
-# Mapping for Kraken OHLC intervals (in minutes) - FIXED: REMOVED UNSUPPORTED 2 HOUR INTERVAL (120)
+# Mapping for Kraken OHLC intervals (in minutes)
 KRAKEN_INTERVALS = {
     "1 minute": 1,
     "5 minute": 5,
     "15 minute": 15,
     "30 minute": 30,
     "1 hour": 60,
-    # "2 hour": 120, <-- 120 is not a supported Kraken OHLC interval, causes EGeneral:Invalid arguments
     "4 hour": 240,
     "1 day": 1440,
     "1 week": 10080,
@@ -264,23 +263,33 @@ def get_indicator_signal(df):
 
     # --- Trend Indicators ---
 
-    # MACD (FIX: Added NaN check)
+    # MACD (NOW DISPLAYS ALL 3 VALUES)
     macd_hist_col = safe_column_lookup(df, 'MACDh_')
-    if macd_hist_col:
+    macd_line_col = safe_column_lookup(df, 'MACD_')
+    macd_signal_col = safe_column_lookup(df, 'MACDs_')
+    
+    if macd_hist_col and macd_line_col and macd_signal_col:
         macd_hist = df[macd_hist_col].iloc[-1]
-
-        if math.isnan(macd_hist):
+        macd_line = df[macd_line_col].iloc[-1]
+        macd_signal = df[macd_signal_col].iloc[-1]
+        
+        # Check for NaN in all three components
+        if math.isnan(macd_hist) or math.isnan(macd_line) or math.isnan(macd_signal):
              signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            macd_hist_str = f"{macd_hist:.4f}"
+            # Format the combined string for the Value column (M: MACD Line, S: Signal Line, H: Histogram)
+            macd_value_str = f"M:{macd_line:.4f} | S:{macd_signal:.4f} | H:{macd_hist:.4f}"
+            
+            # Signal logic remains based on Histogram
             if macd_hist > 0:
-                signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0", macd_value_str)
             elif macd_hist < 0:
-                signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0", macd_value_str)
             else:
-                signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
+                signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_value_str)
     else:
-        signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Error)', 'N/A')
+        signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Error in calculation)', 'N/A')
+
 
     # ADX (FIX: Added NaN check for all components)
     adx_col = safe_column_lookup(df, 'ADX_')
