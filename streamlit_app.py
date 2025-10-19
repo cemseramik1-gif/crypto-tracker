@@ -121,19 +121,19 @@ def get_indicator_signal(df):
     df.ta.rsi(append=True) # RSI (default 14)
     df.ta.macd(append=True) # MACD (default 12, 26, 9)
     df.ta.stoch(append=True) # Stochastic Oscillator (default 14, 3, 3)
-    # df.ta.cci(append=True) # CCI (default 14) - Commented out for now, needs clear signal logic
-    # df.ta.willr(append=True) # Williams %R (default 14)
-    # df.ta.adx(append=True) # ADX (default 14)
+    df.ta.cci(append=True) # CCI (default 14)
+    df.ta.willr(append=True) # Williams %R (default 14)
+    df.ta.adx(append=True) # ADX (default 14)
     
     # Volatility Indicators
     df.ta.bbands(append=True) # Bollinger Bands (default 20, 2)
     
     # Volume / Flow Indicators
     df.ta.obv(append=True) # OBV
-    # df.ta.mfi(append=True) # MFI (default 14)
+    df.ta.mfi(append=True) # MFI (default 14)
     
     # Trend Indicators
-    # df.ta.ichimoku(append=True) # Ichimoku Cloud - Complex, will add later
+    df.ta.ichimoku(append=True) # Ichimoku Cloud - Complex, will add later
 
     # --- 2. Define Signal Logic (Based on standard rules) ---
     
@@ -159,11 +159,12 @@ def get_indicator_signal(df):
         signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0")
         
     # --- Bollinger Bands Signal (Volatility) ---
-    # Signal: Close is above upper band (BBU_20_2.0) -> Bearish (price reversal expected)
-    # Signal: Close is below lower band (BBL_20_2.0) -> Bullish (price bounce expected)
+    # FIX: Corrected column names from BBU_20_2.0 to BBU_20_2 due to library naming convention.
     close = df['Close'].iloc[-1]
-    upper_band = df['BBU_20_2.0'].iloc[-1]
-    lower_band = df['BBL_20_2.0'].iloc[-1]
+    
+    # We now look for 'BBU_20_2' and 'BBL_20_2'
+    upper_band = df['BBU_20_2'].iloc[-1]
+    lower_band = df['BBL_20_2'].iloc[-1]
     
     if close > upper_band:
         signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close:.2f} > {upper_band:.2f})")
@@ -173,14 +174,14 @@ def get_indicator_signal(df):
         signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
 
     # --- Placeholders for remaining requested indicators ---
-    # We will need to define signal logic for these in future iterations.
+    # We have calculated them above, now just need the logic.
     signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['On-Balance Volume (OBV)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Money Flow Index (MFI)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Williams %R (14)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Logic Not Yet Defined')
     signals['Average Directional Index (ADX)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Ichimoku Cloud (Complex)'] = ('Neutral', 'Logic Not Yet Defined') # Placeholder for the final 10th indicator
+    signals['Ichimoku Cloud (Complex)'] = ('Neutral', 'Logic Not Yet Defined') 
     
     return signals
 
@@ -397,7 +398,7 @@ with st.sidebar:
     selected_timeframe_str = st.selectbox(
         "Timeframe (Interval)",
         options=list(KRAKEN_INTERVALS.keys()),
-        index=6 # Default to '1 day'
+        index=4 # CHANGED: Default to '1 hour' (index 4) instead of '1 day' (index 6)
     )
     selected_interval_minutes = KRAKEN_INTERVALS[selected_timeframe_str]
 
