@@ -53,6 +53,17 @@ if 'api_configs' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Time', 'Feed', 'Status', 'Response Time (ms)'])
 
+# --- Utility Function for Robust Column Lookup (FIX FOR StopIteration) ---
+
+def safe_column_lookup(df, prefix):
+    """Safely finds the first column in the DataFrame that starts with the given prefix."""
+    try:
+        # Use a generator expression to find the column
+        return next(col for col in df.columns if col.startswith(prefix))
+    except StopIteration:
+        # Return None if no column is found, preventing StopIteration error
+        return None
+
 # --- Historical Data Fetcher (Kraken OHLC) ---
 
 @st.cache_data(ttl=300) # Cache historical data for 5 minutes
@@ -139,11 +150,6 @@ def get_indicator_signal(df):
     df.ta.ema(length=50, append=True)
     df.ta.ema(length=200, append=True)
     
-    # VWAP calculation (using the existing 'VWAP' column from OHLC)
-    # Note: Kraken provides VWAP directly in its OHLC data, but pandas_ta's VWAP
-    # calculation is session-based. We'll rely on the simple price comparison against
-    # the existing 'VWAP' column from the OHLC data for the signal logic.
-
     # --- 2. Define Signal Logic (Grouped by type) ---
     signals = {
         'Momentum': {},
@@ -158,94 +164,133 @@ def get_indicator_signal(df):
     # --- Momentum Indicators ---
     
     # RSI
-    rsi_val = df['RSI_14'].iloc[-1]
-    rsi_val_str = f"{rsi_val:.2f}"
-    if rsi_val > 70:
-        signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
-    elif rsi_val < 30:
-        signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
+    rsi_col = safe_column_lookup(df, 'RSI_')
+    if rsi_col:
+        rsi_val = df[rsi_col].iloc[-1]
+        rsi_val_str = f"{rsi_val:.2f}"
+        if rsi_val > 70:
+            signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
+        elif rsi_val < 30:
+            signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
+        else:
+            signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
     else:
-        signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
+        signals['Momentum']['RSI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
     # Stochastic Oscillator
-    k = df['STOCHk_14_3_3'].iloc[-1]
-    k_str = f"{k:.2f}"
-    if k > 80:
-        signals['Momentum']['Stochastic (14,3,3)'] = ('Bearish', f"Overbought (%K={k_str})", k_str)
-    elif k < 20:
-        signals['Momentum']['Stochastic (14,3,3)'] = ('Bullish', f"Oversold (%K={k_str})", k_str)
+    stoch_k_col = safe_column_lookup(df, 'STOCHk_')
+    if stoch_k_col:
+        k = df[stoch_k_col].iloc[-1]
+        k_str = f"{k:.2f}"
+        if k > 80:
+            signals['Momentum']['Stochastic (14,3,3)'] = ('Bearish', f"Overbought (%K={k_str})", k_str)
+        elif k < 20:
+            signals['Momentum']['Stochastic (14,3,3)'] = ('Bullish', f"Oversold (%K={k_str})", k_str)
+        else:
+            signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k_str})", k_str)
     else:
-        signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k_str})", k_str)
+        signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
     # CCI
-    cci_val = df[next(col for col in df.columns if col.startswith('CCI_'))].iloc[-1]
-    cci_val_str = f"{cci_val:.2f}"
-    if cci_val > 100:
-        signals['Momentum']['CCI (14)'] = ('Bearish', f"Extreme Overbought ({cci_val_str})", cci_val_str)
-    elif cci_val < -100:
-        signals['Momentum']['CCI (14)'] = ('Bullish', f"Extreme Oversold ({cci_val_str})", cci_val_str)
+    cci_col = safe_column_lookup(df, 'CCI_')
+    if cci_col:
+        cci_val = df[cci_col].iloc[-1]
+        cci_val_str = f"{cci_val:.2f}"
+        if cci_val > 100:
+            signals['Momentum']['CCI (14)'] = ('Bearish', f"Extreme Overbought ({cci_val_str})", cci_val_str)
+        elif cci_val < -100:
+            signals['Momentum']['CCI (14)'] = ('Bullish', f"Extreme Oversold ({cci_val_str})", cci_val_str)
+        else:
+            signals['Momentum']['CCI (14)'] = ('Neutral', f"Between -100 and +100 ({cci_val_str})", cci_val_str)
     else:
-        signals['Momentum']['CCI (14)'] = ('Neutral', f"Between -100 and +100 ({cci_val_str})", cci_val_str)
+        signals['Momentum']['CCI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
     # MFI
-    mfi_val = df[next(col for col in df.columns if col.startswith('MFI_'))].iloc[-1]
-    mfi_val_str = f"{mfi_val:.2f}"
-    if mfi_val > 80:
-        signals['Momentum']['MFI (14)'] = ('Bearish', f"Overbought ({mfi_val_str})", mfi_val_str)
-    elif mfi_val < 20:
-        signals['Momentum']['MFI (14)'] = ('Bullish', f"Oversold ({mfi_val_str})", mfi_val_str)
+    mfi_col = safe_column_lookup(df, 'MFI_')
+    if mfi_col:
+        mfi_val = df[mfi_col].iloc[-1]
+        mfi_val_str = f"{mfi_val:.2f}"
+        if mfi_val > 80:
+            signals['Momentum']['MFI (14)'] = ('Bearish', f"Overbought ({mfi_val_str})", mfi_val_str)
+        elif mfi_val < 20:
+            signals['Momentum']['MFI (14)'] = ('Bullish', f"Oversold ({mfi_val_str})", mfi_val_str)
+        else:
+            signals['Momentum']['MFI (14)'] = ('Neutral', f"Mid-Range ({mfi_val_str})", mfi_val_str)
     else:
-        signals['Momentum']['MFI (14)'] = ('Neutral', f"Mid-Range ({mfi_val_str})", mfi_val_str)
+        signals['Momentum']['MFI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
     # Williams %R
-    willr_val = df[next(col for col in df.columns if col.startswith('WMR_') or col.startswith('WILLR_'))].iloc[-1]
-    willr_val_str = f"{willr_val:.2f}"
-    if willr_val > -20: 
-        signals['Momentum']['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val_str})", willr_val_str)
-    elif willr_val < -80: 
-        signals['Momentum']['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val_str})", willr_val_str)
+    willr_col = safe_column_lookup(df, 'WMR_') or safe_column_lookup(df, 'WILLR_')
+    if willr_col:
+        willr_val = df[willr_col].iloc[-1]
+        willr_val_str = f"{willr_val:.2f}"
+        if willr_val > -20: 
+            signals['Momentum']['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val_str})", willr_val_str)
+        elif willr_val < -80: 
+            signals['Momentum']['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val_str})", willr_val_str)
+        else:
+            signals['Momentum']['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val_str})", willr_val_str)
     else:
-        signals['Momentum']['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val_str})", willr_val_str)
+        signals['Momentum']['Williams %R (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
     # --- Trend Indicators ---
 
     # MACD
-    macd_hist = df['MACDh_12_26_9'].iloc[-1]
-    macd_hist_str = f"{macd_hist:.4f}"
-    if macd_hist > 0:
-        signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
-    elif macd_hist < 0:
-        signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
+    macd_hist_col = safe_column_lookup(df, 'MACDh_')
+    if macd_hist_col:
+        macd_hist = df[macd_hist_col].iloc[-1]
+        macd_hist_str = f"{macd_hist:.4f}"
+        if macd_hist > 0:
+            signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
+        elif macd_hist < 0:
+            signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
+        else:
+            signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
     else:
-        signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
+        signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # ADX
-    adx = df[next(col for col in df.columns if col.startswith('ADX_'))].iloc[-1]
-    di_plus = df[next(col for col in df.columns if col.startswith('DMP_'))].iloc[-1]
-    di_minus = df[next(col for col in df.columns if col.startswith('DMM_'))].iloc[-1]
-    adx_str = f"{adx:.2f}"
-    strength = "Weak"
-    if adx > 25: strength = "Strong"
-    elif adx > 20: strength = "Developing"
-    if di_plus > di_minus:
-        signals['Trend']['ADX (14)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)", adx_str)
-    elif di_minus > di_plus:
-        signals['Trend']['ADX (14)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)", adx_str)
+    # ADX (Fix implemented here)
+    adx_col = safe_column_lookup(df, 'ADX_')
+    di_plus_col = safe_column_lookup(df, 'DMP_')
+    di_minus_col = safe_column_lookup(df, 'DMM_')
+
+    if adx_col and di_plus_col and di_minus_col:
+        adx = df[adx_col].iloc[-1]
+        di_plus = df[di_plus_col].iloc[-1]
+        di_minus = df[di_minus_col].iloc[-1]
+        
+        adx_str = f"{adx:.2f}"
+        strength = "Weak"
+        if adx > 25: strength = "Strong"
+        elif adx > 20: strength = "Developing"
+        if di_plus > di_minus:
+            signals['Trend']['ADX (14)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)", adx_str)
+        elif di_minus > di_plus:
+            signals['Trend']['ADX (14)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)", adx_str)
+        else:
+            signals['Trend']['ADX (14)'] = ('Neutral', f"No Clear Trend Direction ({strength})", adx_str)
     else:
-        signals['Trend']['ADX (14)'] = ('Neutral', f"No Clear Trend Direction ({strength})", adx_str)
+        signals['Trend']['ADX (14)'] = ('Neutral', 'N/A (Error in calculation)', 'N/A')
+
 
     # Ichimoku Cloud
-    span_a = df[next(col for col in df.columns if col.startswith('ISA_'))].iloc[-1]
-    span_b = df[next(col for col in df.columns if col.startswith('ISB_'))].iloc[-1]
-    cloud_top = max(span_a, span_b)
-    cloud_bottom = min(span_a, span_b)
-    if close > cloud_top:
-        signals['Trend']['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close_str})", close_str)
-    elif close < cloud_bottom:
-        signals['Trend']['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close_str})", close_str)
+    span_a_col = safe_column_lookup(df, 'ISA_')
+    span_b_col = safe_column_lookup(df, 'ISB_')
+
+    if span_a_col and span_b_col:
+        span_a = df[span_a_col].iloc[-1]
+        span_b = df[span_b_col].iloc[-1]
+        cloud_top = max(span_a, span_b)
+        cloud_bottom = min(span_a, span_b)
+        if close > cloud_top:
+            signals['Trend']['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close_str})", close_str)
+        elif close < cloud_bottom:
+            signals['Trend']['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close_str})", close_str)
+        else:
+            signals['Trend']['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close_str})", close_str)
     else:
-        signals['Trend']['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close_str})", close_str)
+        signals['Trend']['Ichimoku Cloud'] = ('Neutral', 'N/A (Error)', 'N/A')
     
     # EMA Signals
     ema_lengths = [9, 21, 50, 200]
@@ -262,50 +307,61 @@ def get_indicator_signal(df):
             else:
                 signals['Trend'][f'EMA ({length})'] = ('Neutral', f"Price at EMA ({close_str})", ema_val_str)
         except KeyError:
-            signals['Trend'][f'EMA ({length})'] = ('Neutral', 'Error: Column not found.', 'N/A')
+            signals['Trend']['Trend'][f'EMA ({length})'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Volume Indicators ---
     
     # CMF
-    cmf_val = df[next(col for col in df.columns if col.startswith('CMF_'))].iloc[-1]
-    cmf_val_str = f"{cmf_val:.3f}"
-    if cmf_val > 0.20:
-        signals['Volume']['CMF (20)'] = ('Bullish', f"Strong Accumulation ({cmf_val_str})", cmf_val_str)
-    elif cmf_val < -0.20:
-        signals['Volume']['CMF (20)'] = ('Bearish', f"Strong Distribution ({cmf_val_str})", cmf_val_str)
+    cmf_col = safe_column_lookup(df, 'CMF_')
+    if cmf_col:
+        cmf_val = df[cmf_col].iloc[-1]
+        cmf_val_str = f"{cmf_val:.3f}"
+        if cmf_val > 0.20:
+            signals['Volume']['CMF (20)'] = ('Bullish', f"Strong Accumulation ({cmf_val_str})", cmf_val_str)
+        elif cmf_val < -0.20:
+            signals['Volume']['CMF (20)'] = ('Bearish', f"Strong Distribution ({cmf_val_str})", cmf_val_str)
+        else:
+            signals['Volume']['CMF (20)'] = ('Neutral', f"Equilibrium/Weak Trend ({cmf_val_str})", cmf_val_str)
     else:
-        signals['Volume']['CMF (20)'] = ('Neutral', f"Equilibrium/Weak Trend ({cmf_val_str})", cmf_val_str)
+        signals['Volume']['CMF (20)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # OBV
-    obv_val = df['OBV'].iloc[-1]
-    obv_prev = df['OBV'].iloc[-5] 
-    obv_val_str = f"{obv_val:,.0f}"
-    if obv_val > obv_prev:
-        signals['Volume']['OBV'] = ('Bullish', "Volume increasing (OBV rising)", obv_val_str)
-    elif obv_val < obv_prev:
-        signals['Volume']['OBV'] = ('Bearish', "Volume decreasing (OBV falling)", obv_val_str)
-    else:
-        signals['Volume']['OBV'] = ('Neutral', "Volume flat or range-bound", obv_val_str)
+
+    # OBV (Assumes 'OBV' column name is stable)
+    try:
+        obv_val = df['OBV'].iloc[-1]
+        obv_prev = df['OBV'].iloc[-5] 
+        obv_val_str = f"{obv_val:,.0f}"
+        if obv_val > obv_prev:
+            signals['Volume']['OBV'] = ('Bullish', "Volume increasing (OBV rising)", obv_val_str)
+        elif obv_val < obv_prev:
+            signals['Volume']['OBV'] = ('Bearish', "Volume decreasing (OBV falling)", obv_val_str)
+        else:
+            signals['Volume']['OBV'] = ('Neutral', "Volume flat or range-bound", obv_val_str)
+    except KeyError:
+        signals['Volume']['OBV'] = ('Neutral', 'N/A (Error)', 'N/A')
 
     # VWAP
     # Using the VWAP column provided by Kraken in the OHLC data
-    vwap_val = df['VWAP'].iloc[-1]
-    vwap_val_str = f"${vwap_val:,.0f}"
-    if close > vwap_val:
-        signals['Volume']['VWAP'] = ('Bullish', f"Price above VWAP ({close_str})", vwap_val_str)
-    elif close < vwap_val:
-        signals['Volume']['VWAP'] = ('Bearish', f"Price below VWAP ({close_str})", vwap_val_str)
-    else:
-        signals['Volume']['VWAP'] = ('Neutral', f"Price at VWAP ({close_str})", vwap_val_str)
+    try:
+        vwap_val = df['VWAP'].iloc[-1]
+        vwap_val_str = f"${vwap_val:,.0f}"
+        if close > vwap_val:
+            signals['Volume']['VWAP'] = ('Bullish', f"Price above VWAP ({close_str})", vwap_val_str)
+        elif close < vwap_val:
+            signals['Volume']['VWAP'] = ('Bearish', f"Price below VWAP ({close_str})", vwap_val_str)
+        else:
+            signals['Volume']['VWAP'] = ('Neutral', f"Price at VWAP ({close_str})", vwap_val_str)
+    except KeyError:
+        signals['Volume']['VWAP'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
     # --- Volatility Indicators ---
 
     # Bollinger Bands
-    try:
-        # Dynamic lookup for BBands columns
-        upper_band_col = next(col for col in df.columns if col.startswith('BBU_'))
-        lower_band_col = next(col for col in df.columns if col.startswith('BBL_'))
+    upper_band_col = safe_column_lookup(df, 'BBU_')
+    lower_band_col = safe_column_lookup(df, 'BBL_')
+    
+    if upper_band_col and lower_band_col:
         upper_band = df[upper_band_col].iloc[-1]
         lower_band = df[lower_band_col].iloc[-1]
         if close > upper_band:
@@ -314,17 +370,17 @@ def get_indicator_signal(df):
             signals['Volatility']['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close_str})", close_str)
         else:
             signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close_str})", close_str)
-    except StopIteration:
-        signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'Error: BB Column not found.', 'N/A')
+    else:
+        signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
     # ATR
-    atr_col = next((col for col in df.columns if col.startswith('ATR_')), None)
+    atr_col = safe_column_lookup(df, 'ATR_')
     if atr_col:
         atr_val = df[atr_col].iloc[-1]
         atr_val_str = f"${atr_val:,.2f}"
         signals['Volatility']['ATR (14)'] = ('Neutral', f"Average bar range: {atr_val_str}", atr_val_str)
     else:
-        signals['Volatility']['ATR (14)'] = ('Neutral', 'Error: Column not found.', 'N/A')
+        signals['Volatility']['ATR (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
     return signals
 
@@ -351,8 +407,9 @@ def get_divergence_alerts(df):
     # --------------------------------------------------------
     # 1. MFI & CMF Cross Alerts (Immediate Reversal/Flow Change)
     # --------------------------------------------------------
-    mfi_col = next((col for col in df.columns if col.startswith('MFI_')), None)
-    cmf_col = next((col for col in df.columns if col.startswith('CMF_')), None)
+    mfi_col = safe_column_lookup(df, 'MFI_')
+    cmf_col = safe_column_lookup(df, 'CMF_')
+    atr_col = safe_column_lookup(df, 'ATR_')
 
     if mfi_col:
         mfi_current = current[mfi_col]
@@ -404,41 +461,43 @@ def get_divergence_alerts(df):
     # 5-Bar analysis
     recent_df = df.tail(5)
     
-    # Calculate key metrics
-    avg_volume = recent_df['Volume'].mean()
-    current_volume = current['Volume']
-    current_range = current['High'] - current['Low']
+    # Check for required columns before proceeding
+    if atr_col and cmf_col and 'Volume' in current and 'High' in current and 'Low' in current:
+        
+        # Calculate key metrics
+        avg_volume = recent_df['Volume'].mean()
+        current_volume = current['Volume']
+        current_range = current['High'] - current['Low']
+        
+        atr_val = current[atr_col]
+        cmf_val = current[cmf_col]
     
-    atr_col = next((col for col in df.columns if col.startswith('ATR_')), None)
-    atr_val = current[atr_col] if atr_col else 0
-    cmf_val = current[cmf_col] if cmf_col else 0
-
-    # Define threshold constants (can be adjusted)
-    VOLUME_SPIKE_FACTOR = 1.5  # Current volume is 1.5x the 5-bar average
-    RANGE_COMPRESSION_FACTOR = 0.5 # Current range is less than 50% of ATR
-
-    if current_volume > avg_volume * VOLUME_SPIKE_FACTOR and current_range < atr_val * RANGE_COMPRESSION_FACTOR:
-        
-        # High volume, low price movement (disparity detected)
-        vol_str = f"{current_volume/1000:,.0f}K"
-        
-        # Check CMF for directional bias
-        if cmf_val > 0.10: # Accumulation dominant, suggests demand is meeting supply but unable to push price higher
-            alerts.append({
-                'Indicator': 'Vol/Price Disparity',
-                'Signal': 'BEARISH SHORT',
-                'Message': f"High Accumulation (CMF: {cmf_val:.3f}) with low volatility. Supply is absorbing heavy demand (potential top/trap). Vol: {vol_str}",
-                'Direction': 'Short',
-                'Value': f"Vol: {vol_str}"
-            })
-        elif cmf_val < -0.10: # Distribution dominant, suggests selling is met by floor buying but unable to break down
-            alerts.append({
-                'Indicator': 'Vol/Price Disparity',
-                'Signal': 'BULLISH LONG',
-                'Message': f"High Distribution (CMF: {cmf_val:.3f}) with low volatility. Demand is absorbing heavy supply (potential bottom/Long entry). Vol: {vol_str}",
-                'Direction': 'Long',
-                'Value': f"Vol: {vol_str}"
-            })
+        # Define threshold constants (can be adjusted)
+        VOLUME_SPIKE_FACTOR = 1.5  # Current volume is 1.5x the 5-bar average
+        RANGE_COMPRESSION_FACTOR = 0.5 # Current range is less than 50% of ATR
+    
+        if current_volume > avg_volume * VOLUME_SPIKE_FACTOR and current_range < atr_val * RANGE_COMPRESSION_FACTOR:
+            
+            # High volume, low price movement (disparity detected)
+            vol_str = f"{current_volume/1000:,.0f}K"
+            
+            # Check CMF for directional bias
+            if cmf_val > 0.10: # Accumulation dominant, suggests demand is meeting supply but unable to push price higher
+                alerts.append({
+                    'Indicator': 'Vol/Price Disparity',
+                    'Signal': 'BEARISH SHORT',
+                    'Message': f"High Accumulation (CMF: {cmf_val:.3f}) with low volatility. Supply is absorbing heavy demand (potential top/trap). Vol: {vol_str}",
+                    'Direction': 'Short',
+                    'Value': f"Vol: {vol_str}"
+                })
+            elif cmf_val < -0.10: # Distribution dominant, suggests selling is met by floor buying but unable to break down
+                alerts.append({
+                    'Indicator': 'Vol/Price Disparity',
+                    'Signal': 'BULLISH LONG',
+                    'Message': f"High Distribution (CMF: {cmf_val:.3f}) with low volatility. Demand is absorbing heavy supply (potential bottom/Long entry). Vol: {vol_str}",
+                    'Direction': 'Long',
+                    'Value': f"Vol: {vol_str}"
+                })
 
     return alerts
 
