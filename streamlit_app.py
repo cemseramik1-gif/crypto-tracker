@@ -33,62 +33,82 @@ def fetch_blockchain_metrics():
         'Miner_Netflow': np.random.uniform(-2000, 2000, size=len(dates)),
         'Exchange_Netflow': np.random.uniform(-5000, 5000, size=len(dates)),
         'Funding_Rate': np.random.uniform(-0.01, 0.01, size=len(dates)),
+        'Miner_Reserve': np.random.uniform(1e5, 2e6, size=len(dates)),
+        'Exchange_Reserve': np.random.uniform(1e6, 3e6, size=len(dates)),
     })
     df.set_index('date', inplace=True)
     return df
 
-# ---------------------- Indicators ----------------------
 def compute_indicators(df):
     df = df.copy()
+    # EMAs
     df['EMA9'] = ta.ema(df['price'], length=9)
     df['EMA21'] = ta.ema(df['price'], length=21)
     df['EMA50'] = ta.ema(df['price'], length=50)
     df['EMA200'] = ta.ema(df['price'], length=200)
+    # RSI
     df['RSI'] = ta.rsi(df['price'], length=14)
+    # MACD
     macd = ta.macd(df['price'])
-    df['MACD'] = macd['MACD_12_26_9']
-    df['MACD_signal'] = macd['MACDs_12_26_9']
+    df['MACD'] = macd.get('MACD_12_26_9', np.nan)
+    df['MACD_signal'] = macd.get('MACDs_12_26_9', np.nan)
+    # Bollinger Bands
     bbands = ta.bbands(df['price'])
-    for col in bbands.columns:
-        if 'BBU' in col: df['BB_upper'] = bbands[col]
-        elif 'BBL' in col: df['BB_lower'] = bbands[col]
+    df['BB_upper'] = bbands.get('BBU_20_2.0', np.nan)
+    df['BB_lower'] = bbands.get('BBL_20_2.0', np.nan)
+    # ATR
     df['ATR'] = ta.atr(df['price'], df['price'], df['price'], length=14)
+    # OBV
     df['OBV'] = ta.obv(df['price'], df.get('volume', pd.Series(1, index=df.index)))
+    # Volume Oscillator
+    df['VO'] = ta.vosc(df['price'], fast=14, slow=28).get('VOSC_14_28', np.nan)
+    # ADX
+    df['ADX'] = ta.adx(df['price'], df['price'], df['price'], length=14).get('ADX_14', np.nan)
+    # SAR
+    df['SAR'] = ta.sar(df['price'], df['price']).get('SAR_0.02_0.2', np.nan)
+    # VWAP (approx using price*volume / cumulative volume)
+    df['VWAP'] = (df['price'] * 1).cumsum() / (np.arange(1,len(df)+1))
+    # CMF (approximate)
+    df['CMF'] = np.random.uniform(-0.2, 0.2, size=len(df))  # placeholder
     return df
 
-# ---------------------- Signals & Colors ----------------------
+def safe_get(latest, col_name):
+    return latest[col_name] if col_name in latest else np.nan
+
 def get_signal_color(value, metric):
-    # return (color, explanation)
+    if pd.isna(value):
+        return 'gray', f"{metric}: data unavailable"
+    # EMA_cross
     if metric == 'EMA_cross':
-        diff = latest['EMA9'] - latest['EMA21']
-        if diff > 0.5: return 'green', f"EMA9 above EMA21 (+{diff:.2f})"
-        elif diff < -0.5: return 'red', f"EMA9 below EMA21 ({diff:.2f})"
-        else: return 'gray', f"EMA neutral ({diff:.2f})"
+        if value > 0.5: return 'green', f"EMA9 above EMA21 (+{value:.2f})"
+        elif value < -0.5: return 'red', f"EMA9 below EMA21 ({value:.2f})"
+        else: return 'gray', f"EMA neutral ({value:.2f})"
+    # RSI
     elif metric == 'RSI':
         if value > 60: return 'red', f"Overbought ({value:.1f})"
         elif value < 40: return 'green', f"Oversold ({value:.1f})"
         else: return 'gray', f"Neutral ({value:.1f})"
+    # MACD
     elif metric == 'MACD':
-        diff = latest['MACD'] - latest['MACD_signal']
-        if diff > 0.01: return 'green', f"Bullish ({diff:.3f})"
-        elif diff < -0.01: return 'red', f"Bearish ({diff:.3f})"
-        else: return 'gray', f"Neutral ({diff:.3f})"
+        if value > 0.01: return 'green', f"Bullish ({value:.3f})"
+        elif value < -0.01: return 'red', f"Bearish ({value:.3f})"
+        else: return 'gray', f"Neutral ({value:.3f})"
+    # NUPL
     elif metric == 'NUPL':
         if value > 0.5: return 'red', f"Market top-ish ({value:.2f})"
         elif value < 0.25: return 'green', f"Market bottom-ish ({value:.2f})"
         else: return 'gray', f"Neutral ({value:.2f})"
+    # Supply in Profit
     elif metric == 'Supply_in_Profit_pct':
         if value > 80: return 'red', f"High supply in profit ({value:.1f}%)"
         elif value < 60: return 'green', f"Low supply in profit ({value:.1f}%)"
         else: return 'gray', f"Neutral ({value:.1f}%)"
-    elif metric == 'Miner_Netflow':
-        if value > 0: return 'red', f"Miner selling pressure ({value:.0f})"
-        elif value < 0: return 'green', f"Miner accumulation ({value:.0f})"
+    # Miner/Exchange Netflow
+    elif metric in ['Miner_Netflow', 'Exchange_Netflow']:
+        if value > 0: return 'red', f"Selling pressure ({value:.0f})"
+        elif value < 0: return 'green', f"Accumulation ({value:.0f})"
         else: return 'gray', f"Neutral ({value:.0f})"
-    elif metric == 'Exchange_Netflow':
-        if value > 0: return 'red', f"Exchange inflow selling ({value:.0f})"
-        elif value < 0: return 'green', f"Exchange outflow buying ({value:.0f})"
-        else: return 'gray', f"Neutral ({value:.0f})"
+    # Funding Rate
     elif metric == 'Funding_Rate':
         if value > 0.002: return 'red', f"Long pressure ({value:.4f})"
         elif value < -0.002: return 'green', f"Short pressure ({value:.4f})"
@@ -96,12 +116,12 @@ def get_signal_color(value, metric):
     else:
         return 'gray', f"{metric}: {value}"
 
-# ---------------------- UI ----------------------
+# ---------------------- Sidebar ----------------------
 st.sidebar.header("Settings")
 coin = st.sidebar.selectbox("Select coin", ['bitcoin', 'ethereum'])
 days = st.sidebar.selectbox("Timeframe (days)", [30, 60, 90, 180])
 
-# Fetch data
+# ---------------------- Data ----------------------
 price_df = fetch_price_data(coin, days=days)
 chain_df = fetch_blockchain_metrics()
 df = price_df.join(chain_df, how='left')
@@ -117,13 +137,23 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------- Red/Green/Gray Boxes ----------------------
 st.subheader("Latest Signals & Metrics")
-metrics_list = ['EMA_cross','RSI','MACD','NUPL','Supply_in_Profit_pct','Miner_Netflow','Exchange_Netflow','Funding_Rate']
+metrics_list = [
+    'EMA_cross','RSI','MACD','NUPL','Supply_in_Profit_pct',
+    'Miner_Netflow','Exchange_Netflow','Funding_Rate',
+    'ATR','ADX','SAR','VWAP','CMF','OBV','VO'
+]
 cols = st.columns(len(metrics_list))
 for i, m in enumerate(metrics_list):
-    val = latest[m.replace('_cross','')] if '_cross' in m else latest[m]
+    if m == 'EMA_cross':
+        val = safe_get(latest,'EMA9') - safe_get(latest,'EMA21')
+    else:
+        val = safe_get(latest,m)
     color, explanation = get_signal_color(val, m)
-    cols[i].markdown(f"<div style='background-color:{color};padding:10px;border-radius:5px;text-align:center'>"
-                     f"<b>{m}</b><br>{explanation}</div>", unsafe_allow_html=True)
+    cols[i].markdown(
+        f"<div style='background-color:{color};padding:10px;border-radius:5px;text-align:center'>"
+        f"<b>{m}</b><br>{explanation}</div>", 
+        unsafe_allow_html=True
+    )
 
 # ---------------------- Forecast ----------------------
 st.subheader("30-Day Simple Forecast (Scenario)")
