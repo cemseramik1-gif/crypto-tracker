@@ -168,7 +168,8 @@ def run_all_checks():
             st.session_state.api_configs[i]['status'] = final_status
             st.session_state.api_configs[i]['last_check'] = datetime.now()
             st.session_state.api_configs[i]['last_result'] = final_result
-            st.session_session.api_configs[i]['last_data'] = final_data
+            # FIX: Corrected typo from st.session_session to st.session_state
+            st.session_state.api_configs[i]['last_data'] = final_data
             
             # Add to history
             new_history_entries.append({
