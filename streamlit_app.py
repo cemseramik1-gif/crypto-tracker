@@ -9,22 +9,20 @@ from datetime import datetime
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 1
 
-# FIX: Changed to 'api1.binance.com' to attempt to bypass the 451 Client Error (Legal Restriction/Geo-block).
-BINANCE_API_URL = "https://api1.binance.com" 
+# NEW: Switching to Kraken API due to Binance Geo-blocking (HTTP 451)
+KRAKEN_API_URL = "https://api.kraken.com"
+# Kraken uses XBTUSD for Bitcoin/USD
+KRAKEN_TICKER_ENDPOINT = f"{KRAKEN_API_URL}/0/public/Ticker?pair=XBTUSD" 
 
 # The INITIAL_CONFIG list for the health check section (Section 1)
 INITIAL_CONFIG = [
-    # 1. Critical free blockchain data API (BlockCypher)
+    # 1. Critical free blockchain data API (BlockCypher) - Kept for decentralized check
     {"id": 1, "name": "Blockchain (BTC BlockCypher)", "url": "https://api.blockcypher.com/v1/btc/main", "status": "Pending", "last_check": None, "last_result": ""},
-    # 2. Stable Binance API endpoint check (Original blocked endpoint)
-    {"id": 2, "name": "Binance API (Stable)", "url": "https://api.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
-    # 3. Binance API endpoint being used for live price fetching
-    {"id": 3, "name": "Binance API (Fast 1 - LIVE)", "url": "https://api1.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
-    # 4. Alternative Binance endpoints added for monitoring
-    {"id": 4, "name": "Binance API (Fast 2)", "url": "https://api2.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
-    {"id": 5, "name": "Binance API (Fast 3)", "url": "https://api3.binance.com/api/v3/ping", "status": "Pending", "last_check": None, "last_result": ""},
-    # 6. Mock data feed example for general system health check
-    {"id": 6, "name": "Financial (Mock Data)", "url": "https://jsonplaceholder.typicode.com/todos/1", "status": "Pending", "last_check": None, "last_result": ""},
+    # 2. Kraken API Stable Check - Using Time endpoint for basic health check
+    {"id": 2, "name": "Kraken API (Stable Time)", "url": f"{KRAKEN_API_URL}/0/public/Time", "status": "Pending", "last_check": None, "last_result": ""},
+    # 3. Kraken API Live Data Check - Monitoring the specific endpoint we use for the dashboard
+    {"id": 3, "name": "Kraken API (Live Ticker)", "url": KRAKEN_TICKER_ENDPOINT, "status": "Pending", "last_check": None, "last_result": ""},
+    # Removed all Binance and Mock Data feeds.
 ]
 
 
@@ -41,26 +39,42 @@ if 'api_configs' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Time', 'Feed', 'Status', 'Response Time (ms)'])
 
-# --- New: Bitcoin Data Fetcher (Binance 24hr Ticker) ---
+# --- Bitcoin Data Fetcher (Kraken Ticker) ---
 
 @st.cache_data(ttl=15) # Cache price data for 15 seconds to be closer to "live"
 def fetch_btc_data():
-    """Fetches live Bitcoin price, 24h volume, and 24h change from Binance public API."""
-    ticker_url = f"{BINANCE_API_URL}/api/v3/ticker/24hr?symbol=BTCUSDT"
+    """Fetches live Bitcoin price, 24h volume, and 24h change from Kraken public API."""
     try:
-        response = requests.get(ticker_url, timeout=5)
+        response = requests.get(KRAKEN_TICKER_ENDPOINT, timeout=5)
         response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
         data = response.json()
         
-        # Extract required fields for TA preparation
-        price = float(data.get('lastPrice', 0))
-        volume = float(data.get('volume', 0))
-        change_percent = float(data.get('priceChangePercent', 0))
+        # Check for Kraken API errors
+        if data.get('error'):
+            error_msg = data['error'][0] if data['error'] else "Unknown Kraken API Error"
+            st.error(f"Kraken API reported an error: {error_msg}")
+            return None, None, None
+
+        # Kraken returns data in 'result' key, with XBTUSD as the key for Bitcoin
+        btc_data = data['result'].get('XBTUSD')
+        if not btc_data:
+            st.error("Kraken response did not contain BTCUSD (XBTUSD) data.")
+            return None, None, None
+        
+        # Extract required fields for TA preparation (Kraken structure is: [price, volume, high, low...])
+        # 'c' is the last trade price [0]
+        price = float(btc_data['c'][0])
+        # 'v' is the 24h volume [1]
+        volume = float(btc_data['v'][1])
+        
+        # Calculating 24h change percent from 'o' (opening price) and 'c' (closing price)
+        open_price = float(btc_data['o'])
+        change_percent = ((price - open_price) / open_price) * 100 if open_price else 0
         
         return price, volume, change_percent
     except Exception as e:
         # Re-raise or log the error to Streamlit's interface
-        st.error(f"Could not fetch live Bitcoin data from Binance: {e}")
+        st.error(f"Could not fetch live Bitcoin data from Kraken: {e}")
         return None, None, None
 
 # --- Existing Core Logic: API Check with Exponential Backoff ---
@@ -82,23 +96,30 @@ def check_single_api(url, attempt=0):
         response = requests.get(url, timeout=10)
         response_time_ms = round((time.time() - start_time) * 1000)
 
+        # Handle successful HTTP status (200)
         if response.status_code == 200:
-            # Success: Data feed is UP
             data = response.json()
             
-            # Extract relevant info for status update
+            # Check for specific Kraken API errors within the 200 response
+            if data.get('error') and data['error']:
+                error_msg = data['error'][0] if data['error'] else "Unknown Kraken API Error"
+                status = "API Error"
+                result_detail = f"Kraken Error: {error_msg}"
+                return status, result_detail, response_time_ms, {"error": error_msg}
+
+            # Success: Data feed is UP
             status = "UP"
             result_detail = f"OK ({response_time_ms}ms)"
             if isinstance(data, dict):
                 # Specific check for the BlockCypher blockchain API
                 if 'block_height' in data:
                     result_detail += f", Block: {data['block_height']:,}"
-                elif 'title' in data: # Example for JSONPlaceholder
-                    result_detail += f", Title: {data['title'][:20]}..."
+                elif 'unixtime' in data.get('result', {}): # Kraken Time check
+                    result_detail += f", Kraken Time OK"
                 
             return status, result_detail, response_time_ms, data
         
-        # API responded, but with an error status (e.g., 404, 500, or the 451)
+        # API responded, but with an error status (e.g., 404, 500)
         status = "HTTP Error"
         # If it's a 451, make that explicit
         if response.status_code == 451:
@@ -121,12 +142,6 @@ def check_single_api(url, attempt=0):
         result_detail = str(e)
         return status, result_detail, -1, {"error": result_detail}
     except json.JSONDecodeError:
-        # Binance /api/v3/ping returns an empty response body
-        if url.endswith("/api/v3/ping") and response.status_code == 200:
-             status = "UP"
-             result_detail = f"OK (Ping Success, {response_time_ms}ms)"
-             return status, result_detail, response_time_ms, {}
-        
         status = "Invalid JSON"
         result_detail = "Response was not valid JSON."
         return status, result_detail, -1, {"error": result_detail}
@@ -157,8 +172,8 @@ def run_all_checks():
                 
                 status, result, res_time, data = check_single_api(config['url'], attempt)
 
-                if status in ["UP", "HTTP Error", "Invalid JSON"]:
-                    # An acceptable response (either good or a clear HTTP error) was received
+                if status in ["UP", "HTTP Error", "Invalid JSON", "API Error"]:
+                    # An acceptable response (either good or a clear error) was received
                     final_status = status
                     final_result = result
                     final_time = res_time
@@ -202,11 +217,11 @@ def run_all_checks():
 
 # --- Streamlit UI Layout ---
 
-st.title("Bitcoin Data Dashboard (TA Prep & Feed Health)")
-st.markdown("Live data pulled from **Binance API**. Health monitored with **exponential backoff**.")
+st.title("Bitcoin TA Prep & Feed Monitor")
+st.markdown("Live data pulled from **Kraken API**. Health monitored with **exponential backoff**.")
 
 # --- 0. Live Bitcoin Tracking ---
-st.header("0. Live Bitcoin Metrics (Binance API)")
+st.header("0. Live Bitcoin Metrics (Kraken API)")
 btc_price, btc_volume, btc_change = fetch_btc_data()
 
 if btc_price is not None:
@@ -225,7 +240,7 @@ if btc_price is not None:
     btc_change_str = f"{btc_change:+.2f}%"
 
     col_price.metric(
-        label="Current Price (BTCUSDT)", 
+        label="Current Price (BTC/USD)", 
         value=f"${btc_price:,.2f}", 
         delta=btc_change_str 
     )
@@ -241,9 +256,9 @@ if btc_price is not None:
         value=volume_str,
     )
     
-    st.caption(f"Data source: {BINANCE_API_URL}. Fetched at {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Data source: {KRAKEN_API_URL}. Fetched at {datetime.now().strftime('%H:%M:%S')}")
 else:
-    st.warning("Bitcoin data not available from Binance API. Check the connection or API health.")
+    st.warning("Bitcoin data not available from Kraken API. Check the connection or API health.")
 
 st.markdown("---")
 
@@ -259,7 +274,7 @@ st.header("1. Critical Data Feed Health Check")
 total_checks = len(st.session_state.api_configs)
 up_count = sum(1 for c in st.session_state.api_configs if c['status'] == 'UP')
 broken_count = sum(1 for c in st.session_state.api_configs if c['status'] in ['BROKEN', 'Timeout', 'Connection Failed', 'Request Error', 'Unknown Error'])
-error_count = sum(1 for c in st.session_state.api_configs if c['status'] in ['HTTP Error', 'Invalid JSON'])
+error_count = sum(1 for c in st.session_state.api_configs if c['status'] in ['HTTP Error', 'Invalid JSON', 'API Error'])
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -282,7 +297,7 @@ def color_status(val):
         color = 'background-color: #d1e7dd' # Green-lite
     elif val in ['BROKEN', 'Timeout', 'Connection Failed', 'Request Error', 'Unknown Error', 'HTTP 451 - Geo-Blocked']:
         color = 'background-color: #f8d7da' # Red-lite
-    elif val in ['HTTP Error', 'Invalid JSON']:
+    elif val in ['HTTP Error', 'Invalid JSON', 'API Error']:
         color = 'background-color: #fff3cd' # Yellow-lite
     else:
         color = ''
