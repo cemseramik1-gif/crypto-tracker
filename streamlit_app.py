@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-import pandas_ta as ta # CRITICAL FIX: Ensures the .ta accessor is available on the DataFrame
+import pandas_ta as ta # CRITICAL: Ensures the .ta accessor is available
 from datetime import datetime, timezone, timedelta
 import math
 import uuid
@@ -16,6 +16,33 @@ BLOCKCYPHER_API_URL = "https://api.blockcypher.com/v1/btc/main"
 # Timezone configuration (e.g., AEST/AEDT is UTC+10 or UTC+11)
 # Set to UTC+11 for Australian time.
 UTC_OFFSET_HOTHOURS = 11
+
+# CRITICAL FIX: Define an explicit strategy to bypass the problematic df.ta.strategy("All") call.
+# This ensures a more stable initialization of the indicators we need.
+CryptoStrategy = ta.Strategy(
+    name="Crypto TA Strategy",
+    ta=[
+        # Momentum Indicators
+        {"kind": "rsi", "length": 14},
+        {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},
+        {"kind": "stoch", "k": 14, "d": 3, "smooth_k": 3},
+        {"kind": "cci", "length": 20},
+        {"kind": "williamsr", "length": 14},
+        # Trend Indicators
+        {"kind": "ema", "length": [9, 21, 50, 200]},
+        {"kind": "adx", "length": 14},
+        {"kind": "ichimoku"}, # Defaults 9, 26, 52
+        # Volume/Flow Indicators
+        {"kind": "obv"},
+        {"kind": "mfi", "length": 14},
+        {"kind": "cmf", "length": 20},
+        {"kind": "vwap"},
+        # Volatility Indicators
+        {"kind": "bbands", "length": 20, "std": 2},
+        {"kind": "atr", "length": 14},
+    ]
+)
+
 
 # Indicator Glossary Data (Used for the interactive reference section)
 INDICATOR_GLOSSARY = {
@@ -346,16 +373,17 @@ def check_kraken_time(url):
 
 def get_indicator_signal(df):
     """Calculates all indicators and determines Bullish/Bearish/Neutral signals."""
+    global CryptoStrategy # Access the globally defined strategy
+
     # Ensure there is enough data for robust TA, typically 200 bars is safe for EMAs/Ichimoku
     if df.empty or len(df) < 200:
         return {} 
 
     try:
-        # Calculate all indicators using pandas_ta (in-place modification)
-        # This requires 'import pandas_ta as ta' at the top of the script
-        df.ta.strategy("All")
+        # APPLY FIX: Use the explicit ta.call() method with the custom strategy
+        df.ta.call(CryptoStrategy)
     except Exception as e:
-        st.error(f"Error calculating indicators with pandas_ta: {e}")
+        st.error(f"Error calculating indicators with pandas_ta using custom strategy: {e}")
         return {}
     
     latest_close = lookup_value(df, 'close')
@@ -373,6 +401,7 @@ def get_indicator_signal(df):
         elif rsi_val < 45: rsi_signal = "Bearish (Momentum Down)"
     
     # 2. MACD (12, 26, 9)
+    # Note: MACD column prefixes are typically MACD, MACDH, MACDs
     macd_line = lookup_value(df, 'MACD_12_26_9')
     macd_hist = lookup_value(df, 'MACDH_12_26_9')
     macd_signal_line = lookup_value(df, 'MACDs_12_26_9')
@@ -427,8 +456,9 @@ def get_indicator_signal(df):
         else: adx_signal = f"Neutral ({strength})"
 
     # 8. Ichimoku Cloud (9, 26, 52)
-    ssa_val = lookup_value(df, 'ISA_9_26')
-    ssb_val = lookup_value(df, 'ISB_9_26')
+    # SSA (Span A) and SSB (Span B) define the cloud boundaries (Kumo)
+    ssa_val = lookup_value(df, 'ISA_9_26_52') 
+    ssb_val = lookup_value(df, 'ISB_9_26_52') 
     ichimoku_signal = "Neutral"
     if ssa_val is not None and ssb_val is not None and latest_close is not None:
         cloud_top = max(ssa_val, ssb_val)
@@ -464,6 +494,7 @@ def get_indicator_signal(df):
         elif cmf_val < 0: cmf_signal = "Bearish (Distribution)"
 
     # 12. Volume Weighted Average Price (VWAP)
+    # Note: VWAP column name is just 'VWAP'
     vwap_val = lookup_value(df, 'VWAP')
     vwap_signal = "Neutral"
     if vwap_val is not None and latest_close is not None:
@@ -743,7 +774,8 @@ st.header("2. Tactical Reversal Alerts")
 if not historical_df.empty and len(historical_df) >= 200:
     # We run the TA calculation here so that both alerts and matrix use the same calculated columns
     ta_signals_df = historical_df.copy()
-    ta_signals_df.ta.strategy("All")
+    # Ensure the strategy is applied to the temporary df for stability
+    ta_signals_df.ta.call(CryptoStrategy) 
     
     alerts = get_divergence_alerts(ta_signals_df)
     if alerts:
