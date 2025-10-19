@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas_ta as ta
@@ -89,16 +89,19 @@ INDICATOR_DEFAULTS = {
     "CMF": {"weight": 0.04, "params": {"period": 20}}
 }
 
-# Available assets and timeframes
+# Available assets and their Binance symbols
 CRYPTO_ASSETS = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum", 
-    "ADA": "cardano",
-    "DOT": "polkadot",
-    "SOL": "solana",
-    "MATIC": "matic-network",
-    "LINK": "chainlink"
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT", 
+    "ADA": "ADAUSDT",
+    "DOT": "DOTUSDT",
+    "SOL": "SOLUSDT",
+    "MATIC": "MATICUSDT",
+    "LINK": "LINKUSDT"
 }
+
+# Binance API endpoints
+BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
 # ---------------------------
 # --------- SIDEBAR ---------
@@ -113,24 +116,23 @@ selected_assets = st.sidebar.multiselect(
     default=["BTC", "ETH"]
 )
 
-# Timeframe selection (Note: CoinGecko free API is best for daily/hourly batches)
+# Timeframe selection for Binance
 st.sidebar.subheader("Timeframe Configuration")
 selected_timeframe = st.sidebar.selectbox(
-    "Select Primary Timeframe (Interval)", 
-    ["1h (Hourly)", "24h (Daily)", "7d (Weekly)"], 
+    "Select Timeframe", 
+    ["1h", "4h", "1d", "1w"], 
     index=0
 )
 
-# Extract days/interval for CoinGecko API
-if "1h" in selected_timeframe:
-    API_DAYS = 90  # Max historical data for hourly
-    API_INTERVAL = 'hourly'
-elif "24h" in selected_timeframe:
-    API_DAYS = 365 * 2 # Two years of data
-    API_INTERVAL = 'daily'
-else: # 7d
-    API_DAYS = 365 * 5 # Five years of data
-    API_INTERVAL = 'daily'
+# Map timeframe to Binance intervals and data limits
+TIMEFRAME_MAP = {
+    "1h": {"interval": "1h", "limit": 500, "days_back": 21},
+    "4h": {"interval": "4h", "limit": 500, "days_back": 84},
+    "1d": {"interval": "1d", "limit": 500, "days_back": 500},
+    "1w": {"interval": "1w", "limit": 500, "days_back": 2600}
+}
+
+selected_config = TIMEFRAME_MAP[selected_timeframe]
 
 # Risk settings
 st.sidebar.subheader("Risk Management")
@@ -168,111 +170,142 @@ for ind, config in INDICATOR_DEFAULTS.items():
 # ------- DATA FETCH --------
 # ---------------------------
 @st.cache_data(ttl=300, show_spinner="Fetching market data...")
-def fetch_crypto_data(coin_id="bitcoin", days=90, interval='daily'):
-    """Fetch cryptocurrency data from CoinGecko API"""
+def fetch_binance_klines(symbol, interval, limit=500):
+    """Fetch OHLCV data from Binance API"""
     try:
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+        url = f"{BINANCE_BASE_URL}/klines"
         params = {
-            'vs_currency': 'usd',
-            'days': days,
-            'interval': interval
+            'symbol': symbol,
+            'interval': interval,
+            'limit': limit
         }
         
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
         
-        # Prices, Market Caps, and Total Volumes
-        prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
-        volumes = pd.DataFrame(data['total_volumes'], columns=['timestamp', 'volume'])
+        # Convert to DataFrame
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
         
-        df = pd.merge(prices, volumes, on='timestamp', how='inner')
+        # Convert types
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_columns:
+            df[col] = pd.to_numeric(df[col])
         
-        # Convert to datetime and interpolate simple OHLC for charting
+        # Convert timestamp to datetime
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df = df.set_index('datetime').drop(columns=['timestamp'])
+        df = df.set_index('datetime')
         
-        # Resample to ensure clear OHLC data points
-        ohlc_df = df['price'].resample('1H').ohlc()
-        volume_df = df['volume'].resample('1H').sum().fillna(0)
-        
-        df_final = pd.merge(ohlc_df, volume_df, left_index=True, right_index=True, how='inner')
-        df_final.columns = ['open', 'high', 'low', 'close', 'volume']
-        
-        # Drop initial rows where OHLC is mostly NaN due to resampling gap
-        return df_final.dropna(subset=['close']).reset_index()
+        return df[['open', 'high', 'low', 'close', 'volume']].reset_index()
         
     except Exception as e:
-        st.error(f"Error fetching data for {coin_id}: {e}")
-        # Create sample data on failure
-        return create_sample_data(days, interval)
+        st.error(f"Error fetching Binance data for {symbol}: {e}")
+        return create_sample_data_binance(interval, limit)
 
-def create_sample_data(days, interval):
-    """Create sample data when API fails (as a redundancy)"""
-    freq = 'H' if interval == 'hourly' else 'D'
-    periods = days * 24 if interval == 'hourly' else days
+def create_sample_data_binance(interval, limit):
+    """Create sample data when API fails"""
+    freq_map = {"1h": "H", "4h": "4H", "1d": "D", "1w": "W"}
+    freq = freq_map.get(interval, "H")
     
-    dates = pd.date_range(end=datetime.now(), periods=periods, freq=freq)
-    prices = 20000 + np.cumsum(np.random.randn(periods) * 50)
+    dates = pd.date_range(end=datetime.now(), periods=limit, freq=freq)
+    prices = 20000 + np.cumsum(np.random.randn(limit) * 50)
     data = pd.DataFrame({
         'datetime': dates,
         'open': prices.shift(1).fillna(prices.iloc[0]),
-        'high': prices * (1 + np.random.rand(periods) * 0.01),
-        'low': prices * (1 - np.random.rand(periods) * 0.01),
+        'high': prices * (1 + np.random.rand(limit) * 0.01),
+        'low': prices * (1 - np.random.rand(limit) * 0.01),
         'close': prices,
-        'volume': np.random.randint(1000, 10000, periods)
+        'volume': np.random.randint(1000, 10000, limit)
     })
     return data
 
 @st.cache_data(ttl=60)
-def fetch_current_prices(assets):
-    """Fetch current prices and 24h change for multiple assets"""
+def fetch_current_prices_binance(assets):
+    """Fetch current prices and 24h change for multiple assets from Binance"""
     try:
-        coin_ids = ",".join([CRYPTO_ASSETS[asset] for asset in assets])
-        url = f"https://api.coingecko.com/api/v3/simple/price"
-        params = {
-            'ids': coin_ids,
-            'vs_currencies': 'usd',
-            'include_24hr_change': 'true'
-        }
+        prices_data = {}
+        for asset in assets:
+            symbol = CRYPTO_ASSETS[asset]
+            url = f"{BINANCE_BASE_URL}/ticker/24hr"
+            params = {'symbol': symbol}
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            prices_data[asset] = {
+                'price': float(data['lastPrice']),
+                'change_24h': float(data['priceChangePercent']),
+                'volume': float(data['volume']),
+                'high_24h': float(data['highPrice']),
+                'low_24h': float(data['lowPrice'])
+            }
         
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception:
+        return prices_data
+    except Exception as e:
+        st.error(f"Error fetching current prices: {e}")
         return {}
 
 @st.cache_data(ttl=3600)
-def fetch_on_chain_sentiment():
-    """Fetch general market/on-chain sentiment indicators (Simulated/Proxy)"""
+def fetch_market_sentiment_binance():
+    """Fetch general market sentiment indicators using Binance data"""
     try:
-        # Fear & Greed Index Proxy (Actual data requires 3rd party API, so we simulate)
-        # 1. Fetching global market cap change (Proxy for general sentiment)
-        url = "https://api.coingecko.com/api/v3/global"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        # Get BTC dominance and overall market trend from top cryptocurrencies
+        top_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "SOLUSDT"]
+        price_changes = []
+        volumes = []
         
-        # 24h Market Cap Change
-        mcap_change = data['data']['market_cap_change_percentage_24h_usd']
+        for symbol in top_symbols:
+            url = f"{BINANCE_BASE_URL}/ticker/24hr"
+            params = {'symbol': symbol}
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            price_changes.append(float(data['priceChangePercent']))
+            volumes.append(float(data['volume']))
         
-        # Mock Fear & Greed Index (0-100)
-        fg_index = np.clip(50 + mcap_change * 3, 5, 95)
+        # Calculate weighted average price change (market sentiment proxy)
+        total_volume = sum(volumes)
+        if total_volume > 0:
+            weighted_change = sum(p * v for p, v in zip(price_changes, volumes)) / total_volume
+        else:
+            weighted_change = sum(price_changes) / len(price_changes)
         
-        # Open Interest/Perpetual Funding Rate (Simulated trend)
-        oi_trend = "Rising" if np.random.rand() > 0.6 else "Falling"
+        # Fear & Greed Index Proxy based on market performance
+        fg_index = np.clip(50 + weighted_change * 2, 5, 95)
+        
+        # Determine market trend
+        if weighted_change > 2:
+            market_trend = "Strong Bullish"
+        elif weighted_change > 0.5:
+            market_trend = "Bullish"
+        elif weighted_change < -2:
+            market_trend = "Strong Bearish"
+        elif weighted_change < -0.5:
+            market_trend = "Bearish"
+        else:
+            market_trend = "Neutral"
         
         sentiment_data = {
-            "mcap_change": mcap_change,
+            "market_change": weighted_change,
             "fear_greed_index": fg_index,
-            "oi_trend": oi_trend
+            "market_trend": market_trend,
+            "total_volume": total_volume
         }
         return sentiment_data
-    except Exception:
+    except Exception as e:
+        st.error(f"Error fetching market sentiment: {e}")
         return {
-            "mcap_change": 0.0,
+            "market_change": 0.0,
             "fear_greed_index": 50,
-            "oi_trend": "Unknown"
+            "market_trend": "Unknown",
+            "total_volume": 0
         }
 
 # ---------------------------
@@ -533,18 +566,19 @@ def main():
     # Fetch data for all selected assets
     data_dict = {}
     for asset in selected_assets:
-        data_dict[asset] = fetch_crypto_data(
-            coin_id=CRYPTO_ASSETS[asset], 
-            days=API_DAYS, 
-            interval=API_INTERVAL
+        symbol = CRYPTO_ASSETS[asset]
+        data_dict[asset] = fetch_binance_klines(
+            symbol=symbol,
+            interval=selected_config["interval"],
+            limit=selected_config["limit"]
         )
 
-    # Fetch global metrics
-    current_prices = fetch_current_prices(selected_assets)
-    sentiment_data = fetch_on_chain_sentiment()
+    # Fetch market data
+    current_prices = fetch_current_prices_binance(selected_assets)
+    sentiment_data = fetch_market_sentiment_binance()
     
     # --- Market Overview Metrics ---
-    st.header("🌎 Global Market & On-Chain Snapshot")
+    st.header("🌎 Global Market & Sentiment Snapshot")
     
     # Determine F&G Sentiment
     fg = sentiment_data['fear_greed_index']
@@ -554,9 +588,9 @@ def main():
     
     with col1:
         st.metric(
-            "Global 24h MCap Change", 
-            f"{sentiment_data['mcap_change']:.2f}%", 
-            delta=f"{sentiment_data['mcap_change']:.2f}"
+            "Market 24h Change", 
+            f"{sentiment_data['market_change']:.2f}%", 
+            delta=f"{sentiment_data['market_change']:.2f}%"
         )
     with col2:
         st.metric("Fear & Greed Index (Proxy)", f"{fg:.0f}", help="0=Extreme Fear, 100=Extreme Greed")
@@ -567,7 +601,7 @@ def main():
         st.markdown(f"**Sentiment Status:** <span style='color:{style_color}'>{fg_status}</span>", unsafe_allow_html=True)
         
     with col4:
-        st.metric("Open Interest Trend (Simulated)", sentiment_data['oi_trend'])
+        st.metric("Market Trend", sentiment_data['market_trend'])
 
     st.markdown("---")
     
@@ -586,10 +620,9 @@ def main():
         overall_sentiment, score = calculate_combined_score(signals, indicator_weights)
         
         # 2. Get Price/Change Data
-        coin_id = CRYPTO_ASSETS[asset]
-        current_data = current_prices.get(coin_id, {'usd': df['close'].iloc[-1], 'usd_24h_change': 0.0})
-        price = current_data['usd']
-        change_24h = current_data.get('usd_24h_change', 0.0)
+        price_data = current_prices.get(asset, {'price': df['close'].iloc[-1], 'change_24h': 0.0})
+        price = price_data['price']
+        change_24h = price_data.get('change_24h', 0.0)
 
         # 3. Display Main Sentiment Card
         sentiment_color = {
@@ -648,11 +681,11 @@ def main():
     # --- How to Use Section (Required) ---
     st.header("📚 How to Use This Alpha Dashboard")
     st.markdown("""
-    This dashboard provides a robust, multi-factor analysis platform designed to assess short- to medium-term sentiment for major crypto assets.
+    This dashboard provides a robust, multi-factor analysis platform designed to assess short- to medium-term sentiment for major crypto assets using **Binance API data**.
     
     ### 1. **Data & Timeframe**
     - **Asset Selection (Sidebar)**: Choose the cryptocurrencies you wish to analyze.
-    - **Timeframe (Sidebar)**: Select the interval (e.g., 1h or 24h) for the underlying data. All indicators and signals are calculated based on this selected timeframe.
+    - **Timeframe (Sidebar)**: Select the interval (1h, 4h, 1d, 1w) for the underlying data from Binance. All indicators and signals are calculated based on this selected timeframe.
     
     ### 2. **Weighted Indicator Scoring**
     The **Overall Sentiment** (Bullish/Neutral/Bearish) is derived from a custom weighted average:
@@ -665,10 +698,11 @@ def main():
     - **Weight (Sidebar)**: You control the importance of each indicator (e.g., set a higher weight for EMA Cross if you prioritize trend following).
     
     ### 3. **Interpreting Results**
-    - **Global Snapshot**: Provides macro context using market cap and the Fear & Greed Index (proxy).
+    - **Global Snapshot**: Provides macro context using market-wide price changes and the Fear & Greed Index (proxy).
     - **Main Sentiment Card**: Displays the final combined signal and confidence score for the selected asset/timeframe.
     - **Drilldown Panel**: Expand this section to view the supporting price chart and the contribution of each individual indicator to the final score.
     
+    **Data Source**: This dashboard uses real-time data from Binance API.
     **Disclaimer**: This tool is for educational and informational purposes only. It is not financial advice. Always perform your own research and manage your risk accordingly.
     """)
 
