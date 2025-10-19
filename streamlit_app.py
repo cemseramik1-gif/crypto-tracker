@@ -4,10 +4,12 @@ import time
 import json
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import pandas_ta as ta # Import the technical analysis library
 
 # --- Configuration and Constants ---
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 1
+# ... (rest of configuration constants remain the same)
 
 # TIMEZONE CONFIG: Set target display timezone to UTC+11
 UTC_OFFSET_HOURS = 11 
@@ -26,7 +28,7 @@ KRAKEN_INTERVALS = {
     "30 minute": 30,
     "1 hour": 60,
     "4 hour": 240,
-    "1 day": 1440, # Default based on user request
+    "1 day": 1440,
     "1 week": 10080,
 }
 
@@ -40,7 +42,7 @@ INITIAL_CONFIG = [
 
 # Configure the Streamlit page layout and title
 st.set_page_config(
-    page_title="Bitcoin TA Prep & Feed Monitor",
+    page_title="Bitcoin TA Signal Matrix & Feed Monitor",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -57,12 +59,8 @@ if 'history' not in st.session_state:
 def fetch_historical_data(interval_minutes, count=300):
     """
     Fetches historical OHLC data from Kraken.
-    Kraken uses a 'since' parameter (start time) instead of a 'limit' (end time/count).
-    We estimate the required 'since' timestamp to fetch the required bar count.
     """
-    st.info(f"Fetching {count} bars of {interval_minutes}-minute data...")
     try:
-        # Estimate the required start time (fetch 50% more data to ensure we get 'count' valid bars)
         seconds_per_interval = interval_minutes * 60
         approx_start_time = int(time.time() - (count * seconds_per_interval * 1.5))
 
@@ -81,12 +79,10 @@ def fetch_historical_data(interval_minutes, count=300):
             st.error(f"Kraken OHLC API reported an error: {error_msg}")
             return None
 
-        # Find the market data key (e.g., 'XXBTZUSD') dynamically
         result_pairs = {k: v for k, v in data.get('result', {}).items() if k != 'last'}
         pair_key = next(iter(result_pairs), None)
         
         if not pair_key:
-            st.warning("Kraken OHLC response contained no market data.")
             return None
 
         ohlc_data = result_pairs.get(pair_key)
@@ -98,8 +94,7 @@ def fetch_historical_data(interval_minutes, count=300):
         
         # Convert types and set index
         df['Time'] = pd.to_datetime(df['Time'], unit='s', utc=True)
-        # Convert OHLC values to float
-        for col in ['Open', 'High', 'Low', 'Close']:
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # Limit to the most recent 'count' bars and drop the last (potentially partial) bar
@@ -111,39 +106,87 @@ def fetch_historical_data(interval_minutes, count=300):
         st.error(f"Could not fetch historical data from Kraken: {e}")
         return None
 
-# --- Technical Analysis (TA) Calculation ---
+# --- NEW: Technical Analysis (TA) Signal Logic ---
 
-def calculate_rsi(df, period=14):
-    """
-    Calculates the Relative Strength Index (RSI) using the standard 14-period 
-    Exponentially Weighted Moving Average (EWMA) method.
-    """
-    if df.empty or 'Close' not in df.columns or len(df) < period:
-        return df
+def get_indicator_signal(df):
+    """Calculates all specified indicators and determines a bullish/bearish/neutral signal."""
+    
+    # Check if the DataFrame has enough data for a 14-period calculation
+    if df is None or df.empty or len(df) < 34: # MACD needs 26+12-1 = 37, but let's use 34 for a slightly lower threshold
+        return {}
+    
+    # --- 1. Calculate ALL indicators using pandas_ta ---
+    
+    # Momentum Indicators
+    df.ta.rsi(append=True) # RSI (default 14)
+    df.ta.macd(append=True) # MACD (default 12, 26, 9)
+    df.ta.stoch(append=True) # Stochastic Oscillator (default 14, 3, 3)
+    # df.ta.cci(append=True) # CCI (default 14) - Commented out for now, needs clear signal logic
+    # df.ta.willr(append=True) # Williams %R (default 14)
+    # df.ta.adx(append=True) # ADX (default 14)
+    
+    # Volatility Indicators
+    df.ta.bbands(append=True) # Bollinger Bands (default 20, 2)
+    
+    # Volume / Flow Indicators
+    df.ta.obv(append=True) # OBV
+    # df.ta.mfi(append=True) # MFI (default 14)
+    
+    # Trend Indicators
+    # df.ta.ichimoku(append=True) # Ichimoku Cloud - Complex, will add later
+
+    # --- 2. Define Signal Logic (Based on standard rules) ---
+    
+    signals = {}
+    
+    # --- RSI Signal (Momentum) ---
+    rsi_val = df['RSI_14'].iloc[-1]
+    if rsi_val > 70:
+        signals['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val:.2f})")
+    elif rsi_val < 30:
+        signals['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val:.2f})")
+    else:
+        signals['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val:.2f})")
+
+    # --- MACD Signal (Momentum/Trend) ---
+    # MACD Signal: MACDh_12_26_9 > 0 is Bullish, < 0 is Bearish
+    macd_hist = df['MACDh_12_26_9'].iloc[-1]
+    if macd_hist > 0:
+        signals['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist:.4f})")
+    elif macd_hist < 0:
+        signals['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist:.4f})")
+    else:
+        signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0")
         
-    # 1. Calculate price change
-    df['Price Change'] = df['Close'].diff()
+    # --- Bollinger Bands Signal (Volatility) ---
+    # Signal: Close is above upper band (BBU_20_2.0) -> Bearish (price reversal expected)
+    # Signal: Close is below lower band (BBL_20_2.0) -> Bullish (price bounce expected)
+    close = df['Close'].iloc[-1]
+    upper_band = df['BBU_20_2.0'].iloc[-1]
+    lower_band = df['BBL_20_2.0'].iloc[-1]
     
-    # 2. Separate gains and losses
-    df['Gain'] = df['Price Change'].apply(lambda x: x if x > 0 else 0)
-    df['Loss'] = df['Price Change'].apply(lambda x: abs(x) if x < 0 else 0)
+    if close > upper_band:
+        signals['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close:.2f} > {upper_band:.2f})")
+    elif close < lower_band:
+        signals['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close:.2f} < {lower_band:.2f})")
+    else:
+        signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
+
+    # --- Placeholders for remaining requested indicators ---
+    # We will need to define signal logic for these in future iterations.
+    signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['On-Balance Volume (OBV)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['Money Flow Index (MFI)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['Williams %R (14)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['Average Directional Index (ADX)'] = ('Neutral', 'Logic Not Yet Defined')
+    signals['Ichimoku Cloud (Complex)'] = ('Neutral', 'Logic Not Yet Defined') # Placeholder for the final 10th indicator
     
-    # 3. Calculate Average Gain and Average Loss (Smoothed using EWMA - Wilder's method)
-    # Pandas ewm(com=period-1, adjust=False) is equivalent to Wilder's smoothing
-    df['Avg Gain'] = df['Gain'].ewm(com=period-1, adjust=False).mean()
-    df['Avg Loss'] = df['Loss'].ewm(com=period-1, adjust=False).mean()
-    
-    # 4. Calculate Relative Strength (RS)
-    df['RS'] = df['Avg Gain'] / df['Avg Loss']
-    
-    # 5. Calculate RSI
-    df['RSI'] = 100 - (100 / (1 + df['RS']))
-    
-    return df
+    return signals
+
 
 # --- Live Bitcoin Data Fetcher (Kraken Ticker) ---
-
-@st.cache_data(ttl=15) # Cache price data for 15 seconds to be closer to "live"
+@st.cache_data(ttl=15) 
 def fetch_btc_data():
     """Fetches live Bitcoin price, 24h volume, and 24h change from Kraken public API."""
     try:
@@ -206,6 +249,7 @@ def check_single_api(url, attempt=0):
             status = "UP"
             result_detail = f"OK ({response_time_ms}ms)"
             if isinstance(data, dict):
+                # Check for the BlockCypher blockchain API
                 if 'block_height' in data:
                     result_detail += f", Block: {data['block_height']:,}"
                 elif 'unixtime' in data.get('result', {}):
@@ -297,7 +341,7 @@ def run_all_checks():
 
 # --- Streamlit UI Layout ---
 
-st.title("Bitcoin TA Prep & Feed Monitor")
+st.title("Bitcoin TA Signal Matrix & Feed Monitor")
 st.markdown("Live data pulled from **Kraken API**. Health monitored with **exponential backoff**.")
 
 # --- 0. Live Bitcoin Tracking ---
@@ -372,31 +416,78 @@ st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_wi
 
 st.markdown("---")
 
+# --- 4. NEW: Automated TA Signals (Tiled Matrix) ---
+st.header(f"4. Automated TA Signal Matrix ({selected_timeframe_str})")
+st.markdown("Consolidated signals (Bullish/Bearish/Neutral) for rapid analysis.")
 
-# --- 3. Technical Analysis ---
-st.header(f"3. Technical Analysis ({selected_timeframe_str} Bars)")
-
-# Fetch historical data based on user input
 historical_df = fetch_historical_data(selected_interval_minutes, selected_bar_count)
+ta_signals = get_indicator_signal(historical_df)
+
+if ta_signals:
+    # Use columns to create the tile layout (4 tiles per row)
+    num_signals = len(ta_signals)
+    cols = st.columns(min(4, num_signals))
+    
+    # Define color map for the tiles
+    color_map = {
+        'Bullish': '#198754',  # Green
+        'Bearish': '#dc3545',  # Red
+        'Neutral': '#6c757d'   # Grey
+    }
+    
+    for i, (indicator_name, (signal, detail)) in enumerate(ta_signals.items()):
+        
+        # Determine the color and icon
+        bg_color = color_map.get(signal, '#6c757d')
+        icon = "🔺" if signal == "Bullish" else "🔻" if signal == "Bearish" else "⚫"
+        
+        # Apply custom HTML/Markdown for the colored tile effect
+        tile_html = f"""
+        <div style="
+            background-color: {bg_color};
+            padding: 15px;
+            border-radius: 8px;
+            color: white;
+            text-align: center;
+            margin-bottom: 10px;
+            height: 100px;
+        ">
+            <h5 style="margin: 0; font-size: 16px;">{indicator_name}</h5>
+            <p style="margin: 5px 0 0 0; font-weight: bold; font-size: 20px;">{icon} {signal.upper()}</p>
+            <p style="margin: 0; font-size: 10px; opacity: 0.8;">{detail}</p>
+        </div>
+        """
+        
+        # Place the tile in the appropriate column
+        with cols[i % 4]:
+            st.markdown(tile_html, unsafe_allow_html=True)
+            
+else:
+    st.warning("Not enough historical data to calculate indicators. Try increasing the bar count or check data fetch status.")
+
+
+st.markdown("---")
+
+# --- 3. Simple Chart View (RSI & Close) - Kept for basic visualization ---
+st.header(f"3. Historical Chart View ({selected_timeframe_str} Bars)")
 
 if historical_df is not None and not historical_df.empty:
     
-    # Run TA calculation
-    ta_df = calculate_rsi(historical_df)
+    # Calculate indicators again if needed for charting (get_indicator_signal calculates them too, but this ensures a clean chart data)
+    ta_df = historical_df.copy()
+    ta_df.ta.rsi(append=True)
     
-    # Extract the latest RSI value
-    latest_rsi = ta_df['RSI'].iloc[-1]
+    latest_rsi = ta_df['RSI_14'].iloc[-1]
     latest_close = ta_df['Close'].iloc[-1]
     
     col_rsi, col_data_count, col_chart = st.columns([1, 1, 3])
     
     with col_rsi:
-        # Determine color for RSI metric
         delta_color = "off"
         if latest_rsi >= 70:
-            delta_color = "inverse" # Red for overbought
+            delta_color = "inverse" 
         elif latest_rsi <= 30:
-            delta_color = "normal"  # Green for oversold
+            delta_color = "normal"  
 
         st.metric(
             label=f"Current RSI (14-period)",
@@ -417,19 +508,16 @@ if historical_df is not None and not historical_df.empty:
 
 
     with col_chart:
-        # Plot the closing price and RSI
-        st.line_chart(ta_df[['Close', 'RSI']])
-        st.caption("The top line is the closing price. The bottom line is the RSI.")
+        st.line_chart(ta_df[['Close', 'RSI_14']])
+        st.caption("The chart remains for visual confirmation of price and momentum.")
     
-    with st.expander("Show Raw Historical Data and RSI Table"):
-        st.dataframe(ta_df[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI']].tail(15), use_container_width=True)
-
+    # Removed the raw data expander since the focus is on the signals
 else:
     st.warning(f"Could not load historical data for the selected parameters: {selected_timeframe_str}, {selected_bar_count} bars.")
 
 st.markdown("---")
 
-# --- 1. Feed Status Overview (Remaining sections preserved) ---
+# --- 1. Feed Status Overview (Monitoring) ---
 st.header("1. Critical Data Feed Health Check")
 
 # Calculate metrics
