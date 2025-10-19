@@ -561,10 +561,14 @@ if ta_signals:
             color: white;
             text-align: center;
             margin-bottom: 10px;
-            height: 100px;
+            height: 120px; /* Increased height for better fit */
         ">
             <h5 style="margin: 0; font-size: 14px; opacity: 0.8;">{indicator_name}</h5>
-            <p style="margin: 0 0 2px 0; font-weight: bold; font-size: 22px;">{value_str}</p>
+            <p style="
+                margin: 5px 0 5px 0; /* Adjusted vertical margin for spacing */
+                font-weight: bold; 
+                font-size: 20px; /* Slightly reduced font size for value */
+            ">{value_str}</p>
             <p style="margin: 0; font-weight: bold; font-size: 16px;">{icon} {signal.upper()}</p>
         </div>
         """
