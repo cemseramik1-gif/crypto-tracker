@@ -1314,24 +1314,6 @@ with st.expander("📚 Technical Indicator Glossary"):
             st.caption(item['description'])
             st.markdown("---")
 
-# --- AUTO-REFRESH ---
-# Add auto-refresh functionality
-import time
-
-if 'auto_refresh' not in st.session_state:
-    st.session_state['auto_refresh'] = False
-
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### ⚡ Auto-Refresh")
-    auto_refresh = st.toggle("Enable Auto-Refresh (30s)", value=st.session_state.get('auto_refresh', False))
-    st.session_state['auto_refresh'] = auto_refresh
-    
-    if auto_refresh:
-        st.info("Dashboard will refresh in 30 seconds")
-        time.sleep(30)
-        st.rerun()
-
 # Footer
 st.markdown("---")
 col_f1, col_f2, col_f3 = st.columns(3)
