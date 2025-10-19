@@ -10,39 +10,6 @@ import pandas_ta as ta
 import warnings
 warnings.filterwarnings('ignore')
 
-# ---------------------------
-# DEPENDENCY HANDLING
-# ---------------------------
-try:
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-except ImportError:
-    st.error("⚠️ yfinance not installed. Installing now...")
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance==0.2.18"])
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-
-try:
-    from textblob import TextBlob
-    TEXTBLOB_AVAILABLE = True
-except ImportError:
-    TEXTBLOB_AVAILABLE = False
-
-try:
-    import tweepy
-    TWEEPY_AVAILABLE = True
-except ImportError:
-    TWEEPY_AVAILABLE = False
-
-try:
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.ensemble import IsolationForest
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-
 # Page configuration
 st.set_page_config(
     layout="wide", 
@@ -106,17 +73,23 @@ INDICATOR_DEFAULTS = {
 
 # Available assets and timeframes
 CRYPTO_ASSETS = {
-    "BTC": "BTC-USD",
-    "ETH": "ETH-USD", 
-    "ADA": "ADA-USD",
-    "DOT": "DOT-USD",
-    "SOL": "SOL-USD",
-    "MATIC": "MATIC-USD",
-    "AVAX": "AVAX-USD",
-    "LINK": "LINK-USD"
+    "BTC": "bitcoin",
+    "ETH": "ethereum", 
+    "ADA": "cardano",
+    "DOT": "polkadot",
+    "SOL": "solana",
+    "MATIC": "matic-network",
+    "AVAX": "avalanche-2",
+    "LINK": "chainlink"
 }
 
-TF_OPTIONS = ["5m", "15m", "30m", "1h", "4h", "Daily", "Weekly"]
+TF_OPTIONS = ["1h", "4h", "24h", "7d"]
+TF_MAPPING = {
+    "1h": "hourly",
+    "4h": "hourly", 
+    "24h": "daily",
+    "7d": "daily"
+}
 
 # ---------------------------
 # --------- SIDEBAR ---------
@@ -139,7 +112,7 @@ st.sidebar.subheader("Timeframe Configuration")
 selected_tfs = st.sidebar.multiselect(
     "Select Timeframes", 
     TF_OPTIONS, 
-    default=["1h", "4h", "Daily"]
+    default=["1h", "24h"]
 )
 
 # Risk settings
@@ -179,25 +152,60 @@ for ind, config in INDICATOR_DEFAULTS.items():
 # ------- DATA FETCH --------
 # ---------------------------
 @st.cache_data(ttl=300, show_spinner="Fetching market data...")
-def fetch_crypto_data(symbol="BTC-USD", period="60d", interval="1h"):
-    """Fetch cryptocurrency data from Yahoo Finance"""
+def fetch_crypto_data(coin_id="bitcoin", days=90):
+    """Fetch cryptocurrency data from CoinGecko API"""
     try:
-        if not YFINANCE_AVAILABLE:
-            st.error("yfinance not available. Using fallback data.")
-            return create_sample_data()
-            
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period=period, interval=interval)
-        if data.empty:
-            st.warning(f"No data returned for {symbol}. Using sample data.")
-            return create_sample_data()
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+        params = {
+            'vs_currency': 'usd',
+            'days': days,
+            'interval': 'daily' if days > 90 else 'hourly'
+        }
         
-        data = data.reset_index()
-        data.columns = [col.lower() for col in data.columns]
-        return data[['datetime', 'open', 'high', 'low', 'close', 'volume']]
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Convert to DataFrame
+        prices = data['prices']
+        df = pd.DataFrame(prices, columns=['timestamp', 'price'])
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        # For OHLC data, we'll create synthetic data from price points
+        df['open'] = df['price'].shift(1)
+        df['high'] = df[['open', 'price']].max(axis=1)
+        df['low'] = df[['open', 'price']].min(axis=1)
+        df['close'] = df['price']
+        df['volume'] = 0  # Volume not available in basic endpoint
+        
+        # Handle first row
+        df.loc[0, 'open'] = df.loc[0, 'close']
+        df.loc[0, 'high'] = df.loc[0, 'close'] 
+        df.loc[0, 'low'] = df.loc[0, 'close']
+        
+        return df[['datetime', 'open', 'high', 'low', 'close', 'volume']].dropna()
+        
     except Exception as e:
-        st.error(f"Error fetching data for {symbol}: {e}")
+        st.error(f"Error fetching data for {coin_id}: {e}")
         return create_sample_data()
+
+@st.cache_data(ttl=3600)
+def fetch_current_prices(assets):
+    """Fetch current prices for multiple assets"""
+    try:
+        coin_ids = ",".join([CRYPTO_ASSETS[asset] for asset in assets])
+        url = f"https://api.coingecko.com/api/v3/simple/price"
+        params = {
+            'ids': coin_ids,
+            'vs_currencies': 'usd',
+            'include_24hr_change': 'true'
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except:
+        return {}
 
 def create_sample_data():
     """Create sample data when API fails"""
@@ -214,12 +222,12 @@ def create_sample_data():
     return data
 
 @st.cache_data(ttl=3600)
-def fetch_multiple_assets(assets, timeframe="1h"):
+def fetch_multiple_assets(assets):
     """Fetch data for multiple assets"""
     data_dict = {}
     for asset in assets:
-        symbol = CRYPTO_ASSETS[asset]
-        data = fetch_crypto_data(symbol, interval=timeframe)
+        coin_id = CRYPTO_ASSETS[asset]
+        data = fetch_crypto_data(coin_id)
         if not data.empty:
             data_dict[asset] = data
     return data_dict
@@ -228,11 +236,18 @@ def fetch_multiple_assets(assets, timeframe="1h"):
 def fetch_market_sentiment():
     """Fetch general market sentiment indicators"""
     try:
-        # Mock sentiment data - replace with actual API calls
+        # Using CoinGecko global data for sentiment
+        url = "https://api.coingecko.com/api/v3/global"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        market_cap_change = data['data']['market_cap_change_percentage_24h_usd']
+        fear_greed = np.random.randint(20, 80)  # Mock fear & greed index
+        
         sentiment_data = {
-            "fear_greed": np.random.randint(0, 100),
-            "social_volume": np.random.randint(1000, 50000),
-            "weighted_sentiment": np.random.uniform(-1, 1)
+            "fear_greed": fear_greed,
+            "market_cap_change": market_cap_change,
+            "weighted_sentiment": market_cap_change / 100.0  # Normalize
         }
         return sentiment_data
     except:
@@ -302,22 +317,6 @@ def compute_enhanced_indicators(df, params):
         if d_cols:
             df["Stoch_D"] = stoch[d_cols[0]]
     
-    # Ichimoku Cloud
-    try:
-        ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
-        if ichimoku and len(ichimoku) > 0:
-            df["Ichimoku_Base"] = ichimoku[0]["ITS_9"]
-            df["Ichimoku_Conversion"] = ichimoku[0]["ITA_9"]
-            df["Ichimoku_Span_A"] = ichimoku[0]["ISA_9"]
-            df["Ichimoku_Span_B"] = ichimoku[0]["ISB_26"]
-    except Exception as e:
-        st.warning(f"Ichimoku calculation failed: {e}")
-        # Set default values for Ichimoku columns
-        df["Ichimoku_Base"] = df["close"]
-        df["Ichimoku_Conversion"] = df["close"]
-        df["Ichimoku_Span_A"] = df["close"]
-        df["Ichimoku_Span_B"] = df["close"]
-    
     # Additional indicators with error handling
     try:
         adx_result = ta.adx(df["high"], df["low"], df["close"])
@@ -348,17 +347,6 @@ def compute_enhanced_indicators(df, params):
         df["VWAP"] = (df["volume"] * (df["high"] + df["low"] + df["close"])/3).cumsum() / df["volume"].cumsum()
     except:
         df["VWAP"] = df["close"]
-    
-    # Volume oscillator
-    try:
-        vo_params = params["Volume Oscillator"]["params"]
-        vo_result = ta.pvo(df["volume"], **vo_params)
-        if not vo_result.empty:
-            pvo_cols = [col for col in vo_result.columns if 'PVO_' in col]
-            if pvo_cols:
-                df["VO"] = vo_result[pvo_cols[0]]
-    except:
-        df["VO"] = 0
     
     return df
 
@@ -395,7 +383,7 @@ def calculate_risk_metrics(df):
         returns = df["close"].pct_change().dropna()
         
         metrics = {
-            "volatility": returns.std() * np.sqrt(365) if returns.std() > 0 else 0,  # Annualized
+            "volatility": returns.std() * np.sqrt(365) if returns.std() > 0 else 0,
             "sharpe_ratio": returns.mean() / returns.std() * np.sqrt(365) if returns.std() > 0 else 0,
             "max_drawdown": (df["close"] / df["close"].cummax() - 1).min(),
             "var_95": returns.quantile(0.05) if len(returns) > 0 else 0,
@@ -482,19 +470,6 @@ def generate_trading_signals(df, weights):
             else:
                 signals["Stochastic"] = ("Neutral", f"K:{stoch_k:.1f} D:{stoch_d:.1f}")
         
-        # Ichimoku Signal
-        if all(col in df.columns for col in ["Ichimoku_Span_A", "Ichimoku_Span_B"]):
-            price = last["close"]
-            span_a = last["Ichimoku_Span_A"] if not pd.isna(last["Ichimoku_Span_A"]) else price
-            span_b = last["Ichimoku_Span_B"] if not pd.isna(last["Ichimoku_Span_B"]) else price
-            
-            if price > span_a and price > span_b and span_a > span_b:
-                signals["Ichimoku"] = ("Bullish", "Strong uptrend")
-            elif price < span_a and price < span_b and span_a < span_b:
-                signals["Ichimoku"] = ("Bearish", "Strong downtrend")
-            else:
-                signals["Ichimoku"] = ("Neutral", "Consolidation")
-        
         return signals
     except Exception as e:
         st.error(f"Error generating signals: {e}")
@@ -545,34 +520,32 @@ def create_enhanced_chart(df, asset, timeframe, signals):
             vertical_spacing=0.05,
             subplot_titles=(
                 f'{asset} Price Chart - {timeframe}',
-                'Volume',
-                'RSI & Stochastic',
+                'Price Movement',
+                'RSI',
                 'MACD'
             ),
-            row_heights=[0.5, 0.15, 0.15, 0.2]
+            row_heights=[0.4, 0.2, 0.2, 0.2]
         )
         
         # Price data
         fig.add_trace(
-            go.Candlestick(
+            go.Scatter(
                 x=df['datetime'],
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name='Price'
+                y=df['close'],
+                name='Price',
+                line=dict(color='blue')
             ), row=1, col=1
         )
         
         # EMAs
         if 'EMA9' in df.columns:
             fig.add_trace(
-                go.Scatter(x=df['datetime'], y=df['EMA9'], name='EMA9', line=dict(color='blue')),
+                go.Scatter(x=df['datetime'], y=df['EMA9'], name='EMA9', line=dict(color='orange')),
                 row=1, col=1
             )
         if 'EMA21' in df.columns:
             fig.add_trace(
-                go.Scatter(x=df['datetime'], y=df['EMA21'], name='EMA21', line=dict(color='orange')),
+                go.Scatter(x=df['datetime'], y=df['EMA21'], name='EMA21', line=dict(color='red')),
                 row=1, col=1
             )
         
@@ -590,10 +563,11 @@ def create_enhanced_chart(df, asset, timeframe, signals):
                 row=1, col=1
             )
         
-        # Volume
-        colors = ['red' if row['close'] < row['open'] else 'green' for _, row in df.iterrows()]
+        # Price changes
+        price_changes = df['close'].pct_change() * 100
+        colors = ['red' if x < 0 else 'green' for x in price_changes]
         fig.add_trace(
-            go.Bar(x=df['datetime'], y=df['volume'], name='Volume', marker_color=colors),
+            go.Bar(x=df['datetime'], y=price_changes, name='Daily Change %', marker_color=colors),
             row=2, col=1
         )
         
@@ -608,18 +582,6 @@ def create_enhanced_chart(df, asset, timeframe, signals):
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
             fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
         
-        # Stochastic
-        if 'Stoch_K' in df.columns:
-            fig.add_trace(
-                go.Scatter(x=df['datetime'], y=df['Stoch_K'], name='Stoch %K', line=dict(color='blue')),
-                row=3, col=1
-            )
-        if 'Stoch_D' in df.columns:
-            fig.add_trace(
-                go.Scatter(x=df['datetime'], y=df['Stoch_D'], name='Stoch %D', line=dict(color='red')),
-                row=3, col=1
-            )
-        
         # MACD
         if 'MACD' in df.columns:
             fig.add_trace(
@@ -629,14 +591,6 @@ def create_enhanced_chart(df, asset, timeframe, signals):
         if 'MACD_Signal' in df.columns:
             fig.add_trace(
                 go.Scatter(x=df['datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')),
-                row=4, col=1
-            )
-        # MACD Histogram
-        if 'MACD_Histogram' in df.columns:
-            colors_macd = ['red' if x < 0 else 'green' for x in df['MACD_Histogram']]
-            fig.add_trace(
-                go.Bar(x=df['datetime'], y=df['MACD_Histogram'], name='MACD Histogram', 
-                       marker_color=colors_macd, opacity=0.6),
                 row=4, col=1
             )
         
@@ -656,10 +610,6 @@ def create_enhanced_chart(df, asset, timeframe, signals):
 # ----- MAIN DASHBOARD ------
 # ---------------------------
 def main():
-    # Display dependency status
-    if not YFINANCE_AVAILABLE:
-        st.error("⚠️ yfinance is not available. Some features may be limited.")
-    
     # Market Overview Section
     st.header("📈 Market Overview")
     
@@ -674,9 +624,11 @@ def main():
     
     # Data loading
     with st.spinner("Loading market data..."):
-        for tf in selected_tfs:
-            if tf not in st.session_state.market_data:
-                st.session_state.market_data[tf] = fetch_multiple_assets(selected_assets, tf)
+        if 'data' not in st.session_state.market_data:
+            st.session_state.market_data['data'] = fetch_multiple_assets(selected_assets)
+    
+    # Fetch current prices
+    current_prices = fetch_current_prices(selected_assets)
     
     # Market Overview Metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -695,63 +647,67 @@ def main():
         if sentiment_data:
             st.metric("Market Sentiment", f"{'Bullish' if sentiment_data['weighted_sentiment'] > 0 else 'Bearish'}")
     
+    # Current Prices
+    st.subheader("💰 Current Prices")
+    price_cols = st.columns(len(selected_assets))
+    for idx, asset in enumerate(selected_assets):
+        with price_cols[idx]:
+            coin_id = CRYPTO_ASSETS[asset]
+            if current_prices and coin_id in current_prices:
+                price = current_prices[coin_id]['usd']
+                change_24h = current_prices[coin_id].get('usd_24h_change', 0)
+                st.metric(
+                    f"{asset} Price",
+                    f"${price:,.2f}",
+                    f"{change_24h:.2f}%"
+                )
+    
     # Multi-Timeframe Analysis
-    st.header("⏰ Multi-Timeframe Analysis")
+    st.header("⏰ Technical Analysis")
     
     for asset in selected_assets:
         st.subheader(f"🔍 {asset} Analysis")
         
-        asset_cols = st.columns(len(selected_tfs))
-        
-        for idx, tf in enumerate(selected_tfs):
-            with asset_cols[idx]:
-                if asset in st.session_state.market_data[tf]:
-                    df = st.session_state.market_data[tf][asset]
-                    if not df.empty:
-                        # Compute indicators
-                        df_indicators = compute_enhanced_indicators(df, indicator_weights)
-                        
-                        # Generate signals
-                        signals = generate_trading_signals(df_indicators, indicator_weights)
-                        
-                        # Calculate combined score
-                        overall_sentiment, score = calculate_combined_score(signals, indicator_weights)
-                        
-                        # Display timeframe card
-                        sentiment_color = {
-                            "Bullish": "bullish",
-                            "Bearish": "bearish", 
-                            "Neutral": "neutral"
-                        }[overall_sentiment]
-                        
-                        st.markdown(
-                            f"""
-                            <div class='metric-card {sentiment_color}'>
-                                <h4>{tf}</h4>
-                                <h3>{overall_sentiment}</h3>
-                                <p>Score: {score:.2f}</p>
-                                <p>Price: ${df_indicators['close'].iloc[-1]:.2f}</p>
-                            </div>
-                            """, 
-                            unsafe_allow_html=True
-                        )
+        if asset in st.session_state.market_data['data']:
+            df = st.session_state.market_data['data'][asset]
+            if not df.empty:
+                # Compute indicators
+                df_indicators = compute_enhanced_indicators(df, indicator_weights)
+                
+                # Generate signals
+                signals = generate_trading_signals(df_indicators, indicator_weights)
+                
+                # Calculate combined score
+                overall_sentiment, score = calculate_combined_score(signals, indicator_weights)
+                
+                # Display sentiment card
+                sentiment_color = {
+                    "Bullish": "bullish",
+                    "Bearish": "bearish", 
+                    "Neutral": "neutral"
+                }[overall_sentiment]
+                
+                st.markdown(
+                    f"""
+                    <div class='metric-card {sentiment_color}'>
+                        <h3>Overall Sentiment: {overall_sentiment}</h3>
+                        <p>Confidence Score: {score:.2f}</p>
+                        <p>Current Price: ${df_indicators['close'].iloc[-1]:.2f}</p>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
         
         # Detailed analysis for the asset
         with st.expander(f"Detailed Analysis for {asset}", expanded=False):
-            selected_tf_detail = st.selectbox(
-                f"Select timeframe for detailed chart", 
-                selected_tfs, 
-                key=f"detail_{asset}"
-            )
-            
-            if asset in st.session_state.market_data[selected_tf_detail]:
-                df_detail = st.session_state.market_data[selected_tf_detail][asset]
+            if asset in st.session_state.market_data['data']:
+                df_detail = st.session_state.market_data['data'][asset]
                 if not df_detail.empty:
                     df_indicators_detail = compute_enhanced_indicators(df_detail, indicator_weights)
                     signals_detail = generate_trading_signals(df_indicators_detail, indicator_weights)
                     
                     # Display chart
-                    fig = create_enhanced_chart(df_indicators_detail, asset, selected_tf_detail, signals_detail)
+                    fig = create_enhanced_chart(df_indicators_detail, asset, "Historical", signals_detail)
                     st.plotly_chart(fig, use_container_width=True)
                     
                     # Risk metrics
@@ -759,6 +715,7 @@ def main():
                     regime = detect_market_regime(df_detail)
                     
                     # Display metrics
+                    st.subheader("📊 Risk Metrics")
                     metric_cols = st.columns(4)
                     with metric_cols[0]:
                         st.metric("Volatility", f"{risk_metrics.get('volatility', 0):.2%}")
@@ -770,40 +727,15 @@ def main():
                         st.metric("Market Regime", regime)
                     
                     # Signals table
-                    st.subheader("📊 Signal Breakdown")
-                    signals_df = pd.DataFrame([
-                        {"Indicator": ind, "Signal": sig[0], "Reason": sig[1]} 
-                        for ind, sig in signals_detail.items()
-                    ])
-                    st.dataframe(signals_df, use_container_width=True)
-    
-    # Correlation Analysis
-    if len(selected_assets) > 1:
-        st.header("🔄 Correlation Analysis")
-        
-        # Calculate correlations
-        correlation_data = []
-        for tf in selected_tfs[:1]:  # Use first timeframe for correlation
-            prices = {}
-            for asset in selected_assets:
-                if asset in st.session_state.market_data[tf]:
-                    df = st.session_state.market_data[tf][asset]
-                    if not df.empty and len(df) > 10:
-                        prices[asset] = df['close'].pct_change().dropna()
-            
-            if len(prices) > 1:
-                corr_df = pd.DataFrame(prices).corr()
-                
-                # Plot correlation heatmap
-                fig_corr = px.imshow(
-                    corr_df,
-                    text_auto=True,
-                    aspect="auto",
-                    color_continuous_scale="RdBu_r",
-                    title=f"Asset Correlation Matrix ({tf})"
-                )
-                st.plotly_chart(fig_corr, use_container_width=True)
-                break
+                    st.subheader("🎯 Signal Breakdown")
+                    if signals_detail:
+                        signals_df = pd.DataFrame([
+                            {"Indicator": ind, "Signal": sig[0], "Reason": sig[1]} 
+                            for ind, sig in signals_detail.items()
+                        ])
+                        st.dataframe(signals_df, use_container_width=True)
+                    else:
+                        st.info("No signals generated for this asset")
     
     # Trading Insights
     st.header("💡 Trading Insights")
@@ -814,16 +746,60 @@ def main():
         st.subheader("Strategy Suggestions")
         
         # Generate basic strategy suggestions based on signals
-        for asset in selected_assets[:3]:  # Limit to first 3 assets
-            all_tf_signals = []
-            for tf in selected_tfs:
-                if asset in st.session_state.market_data[tf]:
-                    df = st.session_state.market_data[tf][asset]
-                    if not df.empty:
-                        df_indicators = compute_enhanced_indicators(df, indicator_weights)
-                        signals = generate_trading_signals(df_indicators, indicator_weights)
-                        sentiment, score = calculate_combined_score(signals, indicator_weights)
-                        all_tf_signals.append((tf, sentiment, score))
-            
-            if all_tf_signals:
-                bullish_count = sum(1 for _, sentiment
+        for asset in selected_assets[:3]:
+            if asset in st.session_state.market_data['data']:
+                df = st.session_state.market_data['data'][asset]
+                if not df.empty:
+                    df_indicators = compute_enhanced_indicators(df, indicator_weights)
+                    signals = generate_trading_signals(df_indicators, indicator_weights)
+                    sentiment, score = calculate_combined_score(signals, indicator_weights)
+                    
+                    if sentiment == "Bullish":
+                        suggestion = "🟢 Consider Buying - Bullish signals detected"
+                    elif sentiment == "Bearish":
+                        suggestion = "🔴 Consider Selling - Bearish signals detected"
+                    else:
+                        suggestion = "⚪ Hold Position - Mixed or neutral signals"
+                    
+                    st.write(f"**{asset}**: {suggestion} (Score: {score:.2f})")
+    
+    with insight_col2:
+        st.subheader("Risk Assessment")
+        
+        # Display risk warnings
+        for asset in selected_assets[:2]:
+            if asset in st.session_state.market_data['data']:
+                df = st.session_state.market_data['data'][asset]
+                if not df.empty and len(df) > 20:
+                    risk_metrics = calculate_risk_metrics(df)
+                    volatility = risk_metrics.get('volatility', 0)
+                    
+                    if volatility > 0.8:
+                        st.warning(f"🚨 {asset}: High volatility detected ({volatility:.1%})")
+                    elif volatility > 0.5:
+                        st.info(f"⚠️ {asset}: Elevated volatility ({volatility:.1%})")
+                    else:
+                        st.success(f"✅ {asset}: Normal volatility ({volatility:.1%})")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    ### 📚 How to Use This Dashboard
+    
+    1. **Asset Selection**: Choose cryptocurrencies from the sidebar
+    2. **Indicator Configuration**: Adjust weights and parameters in sidebar  
+    3. **Risk Management**: Set your risk tolerance level
+    4. **Signal Interpretation**: 
+       - 🟢 Bullish: Favorable buying conditions
+       - 🔴 Bearish: Consider selling or shorting
+       - ⚪ Neutral: Wait for clearer signals
+    5. **Technical Analysis**: View charts and indicators for each asset
+    
+    **Data Sources**: CoinGecko API (free tier)
+    **Update Frequency**: Every 5 minutes
+    
+    **Disclaimer**: This tool is for educational purposes only. Always do your own research and consider consulting with a qualified financial advisor before making investment decisions.
+    """)
+
+if __name__ == "__main__":
+    main()
