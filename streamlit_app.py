@@ -87,16 +87,35 @@ def get_kraken_interval_code(interval_label):
     }
     return interval_map.get(interval_label, 60)
 
-def get_html_color_class(signal):
-    """Maps signal status to Tailwind CSS color classes."""
-    if "Bullish" in signal or "Accumulation" in signal or "Oversold" in signal or "Above" in signal or "Up" in signal or "Rising" in signal:
-        return "bg-green-100 border-green-400 text-green-800", "text-green-600"
-    elif "Bearish" in signal or "Distribution" in signal or "Overbought" in signal or "Below" in signal or "Down" in signal or "Falling" in signal:
-        return "bg-red-100 border-red-400 text-red-800", "text-red-600"
-    elif "Strong Trend" in signal or "Expansion" in signal or "Extreme" in signal or "Neutral" not in signal:
-        return "bg-yellow-100 border-yellow-400 text-yellow-800", "text-yellow-600"
+def get_signal_classification(signal_text):
+    """Returns 'bullish', 'bearish', or 'neutral' based on signal text."""
+    signal_lower = signal_text.lower()
+    
+    bullish_keywords = ['bullish', 'accumulation', 'oversold', 'above', 'up', 'rising', 
+                        'golden', 'strong trend (bullish)', 'buy', 'crosses above', 'expansion']
+    bearish_keywords = ['bearish', 'distribution', 'overbought', 'below', 'down', 'falling',
+                        'death', 'strong trend (bearish)', 'sell', 'crosses below', 'contraction']
+    
+    for keyword in bullish_keywords:
+        if keyword in signal_lower:
+            return 'bullish'
+    
+    for keyword in bearish_keywords:
+        if keyword in signal_lower:
+            return 'bearish'
+    
+    return 'neutral'
+
+def get_tile_colors(signal_text):
+    """Returns appropriate colors based on signal classification."""
+    classification = get_signal_classification(signal_text)
+    
+    if classification == 'bullish':
+        return "bg-green-100 border-green-500", "text-green-700", "text-green-900"
+    elif classification == 'bearish':
+        return "bg-red-100 border-red-500", "text-red-700", "text-red-900"
     else:
-        return "bg-gray-100 border-gray-400 text-gray-700", "text-gray-500"
+        return "bg-gray-100 border-gray-400", "text-gray-600", "text-gray-800"
 
 def calculate_support_resistance(df, lookback=20):
     """Calculate support and resistance levels."""
@@ -801,32 +820,42 @@ st.markdown(
     .stButton>button { border-radius: 0.5rem; border: 1px solid #3b82f6; }
     
     .ta-tile {
-        padding: 0.5rem;
+        padding: 1rem;
         border-radius: 0.75rem;
-        border-width: 1px;
+        border-width: 2px;
+        border-style: solid;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        min-height: 120px;
+        min-height: 140px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
+        transition: transform 0.2s;
+    }
+    .ta-tile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px -2px rgba(0, 0, 0, 0.15);
     }
     .tile-value {
-        font-size: 1.25rem;
+        font-size: 1.1rem;
         font-weight: 700;
-        line-height: 1.5;
+        line-height: 1.4;
         text-align: center;
+        margin: 0.5rem 0;
     }
     .tile-signal {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         font-weight: 600;
         text-align: center;
-        padding-top: 0.25rem;
+        padding: 0.25rem;
+        border-radius: 0.375rem;
     }
     .tile-name {
-        font-size: 0.8rem;
-        font-weight: 500;
+        font-size: 0.75rem;
+        font-weight: 600;
         text-align: center;
-        opacity: 0.8;
+        opacity: 0.9;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
     .confluence-box {
         padding: 20px;
@@ -864,10 +893,15 @@ st.markdown(
     }
     
     @media (max-width: 768px) {
-        .ta-tile { min-height: 100px; }
-        .tile-value { font-size: 1rem; }
-        .tile-signal { font-size: 0.8rem; }
-        .confluence-score { font-size: 2rem; }
+        .ta-tile { 
+            min-height: 120px;
+            padding: 0.75rem;
+        }
+        .tile-value { font-size: 0.95rem; }
+        .tile-signal { font-size: 0.75rem; }
+        .tile-name { font-size: 0.7rem; }
+        .confluence-score { font-size: 2.5rem; }
+        .confluence-header { font-size: 1.2rem; }
     }
     </style>
     """,
@@ -1072,10 +1106,10 @@ col_conf1, col_conf2 = st.columns([1, 2])
 
 with col_conf1:
     st.markdown(f"""
-        <div class="confluence-box {color_class}">
+        <div class="confluence-box {color_class}" style="min-height: 250px;">
             <p class="confluence-header">CONFLUENCE SCORE</p>
             <p class="confluence-score">{score}/3</p>
-            <p style="font-size: 1.1rem; font-weight: 600;">{signal}</p>
+            <p style="font-size: 1.1rem; font-weight: 600; margin-top: 10px;">{signal}</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1134,27 +1168,42 @@ st.header("5️⃣ Technical Analysis Matrix")
 
 ta_signals_grouped = get_indicator_signal(etf_df.copy())
 
+# Add On-Chain data to signals
+block_height, hash_rate_phs = fetch_on_chain_data()
+if block_height:
+    ta_signals_grouped["On-Chain"].append({
+        'name': 'Blockchain Height',
+        'value': f"{block_height:,.0f}",
+        'signal': 'Neutral'
+    })
+if hash_rate_phs:
+    # Determine if hash rate is rising or falling (need historical comparison)
+    ta_signals_grouped["On-Chain"].append({
+        'name': 'Hash Rate',
+        'value': f"{hash_rate_phs:.1f} PH/s",
+        'signal': 'Neutral'
+    })
+
 for group_name, signals in ta_signals_grouped.items():
-    if group_name == "Divergence" and signals[0]['signal'] == "No Divergence":
+    if group_name == "Divergence" and len(signals) == 1 and signals[0]['signal'] == "Neutral":
         continue
         
     st.subheader(f"📊 {group_name}")
     
     num_signals = len(signals)
-    num_columns = min(num_signals, 5)
     
     for i in range(0, num_signals, 5):
         row_signals = signals[i:i+5]
         cols = st.columns(len(row_signals))
         
         for j, item in enumerate(row_signals):
-            tile_class, value_class = get_html_color_class(item['signal'])
+            tile_class, signal_class, value_class = get_tile_colors(item['signal'])
             
             cols[j].markdown(f"""
-                <div class='ta-tile {tile_class}'>
-                    <p class='tile-name'>{item['name']}</p>
-                    <p class='tile-value {value_class}'>{item['value']}</p>
-                    <p class='tile-signal'>{item['signal']}</p>
+                <div class='ta-tile {tile_class}' style='border-width: 2px;'>
+                    <p class='tile-name' style='margin-bottom: 8px;'>{item['name']}</p>
+                    <p class='tile-value {value_class}' style='margin: 8px 0;'>{item['value']}</p>
+                    <p class='tile-signal {signal_class}' style='margin-top: 8px; font-weight: 600;'>{item['signal']}</p>
                 </div>
             """, unsafe_allow_html=True)
 
