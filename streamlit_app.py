@@ -160,8 +160,6 @@ def get_html_color_class(signal):
     else:
         return "bg-gray-100 border-gray-400 text-gray-700", "text-gray-500"
 
-# (Glossary HTML function removed for brevity, assuming it exists or is simple enough)
-
 # --- 3. API FETCHING FUNCTIONS ---
 
 @st.cache_data(ttl=60)
@@ -231,17 +229,17 @@ def fetch_historical_data(interval_code, count, label):
 def check_http_status(url):
     start_time = datetime.now()
     response = requests.get(url, timeout=5)
+    response.raise_for_status()
     end_time = datetime.now()
     latency = (end_time - start_time).total_seconds() * 1000
-    response.raise_for_status()
     return "OK", latency, response.json()
 
 def check_kraken_time(url):
     start_time = datetime.now()
     response = requests.get(url, timeout=5)
+    response_json = response.json()
     end_time = datetime.now()
     latency = (end_time - start_time).total_seconds() * 1000
-    response_json = response.json()
     if 'result' in response_json and 'unixtime' in response_json['result']:
         return "OK (Kraken Time OK)", latency, response_json
     else:
@@ -249,37 +247,68 @@ def check_kraken_time(url):
 
 @st.cache_data(ttl=300)
 def run_all_checks():
-    # Implementation of run_all_checks (omitted for brevity but kept in original structure)
-    return [] 
+    """Runs all data feed health checks and returns a list of results."""
+    checks = [
+        {"name": "Kraken Time (Latency Check)", "url": KRAKEN_API_URL + "Time", "checker": check_kraken_time},
+        {"name": "BlockCypher (On-Chain Data)", "url": BLOCKCYPHER_API_URL, "checker": check_http_status},
+        {"name": "Kraken Ticker (Live Price)", "url": KRAKEN_API_URL + "Ticker?pair=XBTUSD", "checker": check_http_status},
+    ]
+    
+    results = []
+    
+    for check in checks:
+        result = {"name": check["name"], "status": "FAIL", "latency_ms": "N/A", "error": ""}
+        try:
+            status, latency, _ = check["checker"](check["url"])
+            result["status"] = status
+            result["latency_ms"] = f"{latency:.0f} ms"
+            result["error"] = "" # Clear error on success
+        except requests.exceptions.Timeout:
+            result["status"] = "TIMEOUT"
+            result["error"] = "Request timed out."
+        except requests.exceptions.RequestException as e:
+            result["error"] = f"HTTP Error: {e}"
+        except Exception as e:
+            result["error"] = f"Internal Check Error: {e}"
+            
+        results.append(result)
+        
+    return results
+
 
 # --- 4. TECHNICAL ANALYSIS LOGIC (FIXED & MTFA) ---
 
 def calculate_ta(df):
     """
     CRITICAL FIX: Explicitly calculates all required TA indicators.
-    This replaces the problematic ta.Strategy() call.
+    Wrapped in a try/except block to prevent crashes from pandas-ta internal errors.
     Modifies the DataFrame in-place and returns it.
     """
     if df.empty or len(df) < 200:
         return df
-
-    # 1. Calculate all required indicators explicitly
-    df.ta.rsi(length=14, append=True)
-    df.ta.macd(fast=12, slow=26, signal=9, append=True)
-    df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-    df.ta.cci(length=20, append=True)
-    df.ta.williamsr(length=14, append=True)
-    df.ta.ema(length=[9, 21, 50, 200], append=True)
-    df.ta.adx(length=14, append=True)
-    df.ta.ichimoku(append=True)
-    df.ta.obv(append=True)
-    df.ta.mfi(length=14, append=True)
-    df.ta.cmf(length=20, append=True)
-    # VWAP is already calculated in fetch_historical_data from Kraken, but calculating again is safe:
-    df.ta.vwap(append=True) 
-    df.ta.bbands(length=20, std=2, append=True)
-    df.ta.atr(length=14, append=True)
     
+    try: 
+        # 1. Calculate all required indicators explicitly
+        df.ta.rsi(length=14, append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        df.ta.cci(length=20, append=True)
+        df.ta.williamsr(length=14, append=True)
+        df.ta.ema(length=[9, 21, 50, 200], append=True)
+        df.ta.adx(length=14, append=True)
+        df.ta.ichimoku(append=True)
+        df.ta.obv(append=True)
+        df.ta.mfi(length=14, append=True)
+        df.ta.cmf(length=20, append=True)
+        # VWAP is already calculated in fetch_historical_data from Kraken, but calculating again is safe:
+        df.ta.vwap(append=True) 
+        df.ta.bbands(length=20, std=2, append=True)
+        df.ta.atr(length=14, append=True)
+    except Exception as e:
+        # Catch any pandas_ta internal error and show a warning instead of crashing the app
+        st.warning(f"Technical Analysis calculation failed on one or more indicators: {e}. Data may be incomplete.")
+        return df # Return the potentially partially calculated DF
+
     return df
 
 def get_indicator_signal(df):
@@ -371,37 +400,40 @@ def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
     # --- PILLAR 1: HTF TREND (200 EMA) ---
     htf_close = lookup_value(htf_df, 'close')
     htf_ema200 = lookup_value(htf_df, 'EMA_200')
-    if htf_close > htf_ema200:
-        score += 1
-        factors.append(f"**+1 | HTF Trend:** Bullish ({htf_label} close > 200 EMA)")
-    elif htf_close < htf_ema200:
-        score -= 1
-        factors.append(f"**-1 | HTF Trend:** Bearish ({htf_label} close < 200 EMA)")
-    else:
-        factors.append(f"**0 | HTF Trend:** Neutral ({htf_label} close near 200 EMA)")
+    if htf_ema200 is not None and htf_close is not None:
+        if htf_close > htf_ema200:
+            score += 1
+            factors.append(f"**+1 | HTF Trend:** Bullish ({htf_label} close > 200 EMA)")
+        elif htf_close < htf_ema200:
+            score -= 1
+            factors.append(f"**-1 | HTF Trend:** Bearish ({htf_label} close < 200 EMA)")
+        else:
+            factors.append(f"**0 | HTF Trend:** Neutral ({htf_label} close near 200 EMA)")
     
     # --- PILLAR 2: ETF MOMENTUM (RSI 55/45) ---
     etf_rsi = lookup_value(etf_df, 'RSI_14')
-    if etf_rsi > 55:
-        score += 1
-        factors.append(f"**+1 | ETF Momentum:** Bullish ({etf_label} RSI > 55)")
-    elif etf_rsi < 45:
-        score -= 1
-        factors.append(f"**-1 | ETF Momentum:** Bearish ({etf_label} RSI < 45)")
-    else:
-        factors.append(f"**0 | ETF Momentum:** Neutral ({etf_label} RSI 45-55)")
+    if etf_rsi is not None:
+        if etf_rsi > 55:
+            score += 1
+            factors.append(f"**+1 | ETF Momentum:** Bullish ({etf_label} RSI > 55)")
+        elif etf_rsi < 45:
+            score -= 1
+            factors.append(f"**-1 | ETF Momentum:** Bearish ({etf_label} RSI < 45)")
+        else:
+            factors.append(f"**0 | ETF Momentum:** Neutral ({etf_label} RSI 45-55)")
 
     # --- PILLAR 3: ETF PRICE ACTION / FLOW (Close vs VWAP) ---
     etf_close = lookup_value(etf_df, 'close')
     etf_vwap = lookup_value(etf_df, 'VWAP')
-    if etf_close > etf_vwap:
-        score += 1
-        factors.append(f"**+1 | ETF Flow:** Bullish ({etf_label} Close > VWAP)")
-    elif etf_close < etf_vwap:
-        score -= 1
-        factors.append(f"**-1 | ETF Flow:** Bearish ({etf_label} Close < VWAP)")
-    else:
-        factors.append(f"**0 | ETF Flow:** Neutral ({etf_label} Close near VWAP)")
+    if etf_vwap is not None and etf_close is not None:
+        if etf_close > etf_vwap:
+            score += 1
+            factors.append(f"**+1 | ETF Flow:** Bullish ({etf_label} Close > VWAP)")
+        elif etf_close < etf_vwap:
+            score -= 1
+            factors.append(f"**-1 | ETF Flow:** Bearish ({etf_label} Close < VWAP)")
+        else:
+            factors.append(f"**0 | ETF Flow:** Neutral ({etf_label} Close near VWAP)")
             
     # Determine primary signal from score
     if score >= 2:
@@ -421,8 +453,6 @@ def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
         color = "bg-yellow-500"
 
     return score, signal, factors, color
-
-# (Other functions like get_divergence_alerts remain the same)
 
 # --- 5. STREAMLIT UI LAYOUT ---
 
@@ -550,7 +580,27 @@ with st.sidebar:
     
     # Health Check Button
     if st.button("Run Data Feed Health Check", use_container_width=True):
-        st.session_state['health_check_result'] = run_all_checks()
+        # Use st.spinner for a better UX during the check
+        with st.spinner('Running API health checks...'):
+            st.session_state['health_check_result'] = run_all_checks()
+
+    # Display Health Check Results
+    if 'health_check_result' in st.session_state:
+        st.subheader("Latest Health Check Results")
+        
+        # Use a DataFrame for clean, structured output
+        df_results = pd.DataFrame(st.session_state['health_check_result'])
+        
+        # Custom styling for the table (coloring the status column)
+        def style_status(val):
+            color = 'green' if 'OK' in val else 'red' if 'FAIL' in val or 'TIMEOUT' in val else 'orange'
+            return f'color: {color}; font-weight: bold'
+
+        st.dataframe(
+            df_results[['name', 'status', 'latency_ms', 'error']].style.applymap(style_status, subset=['status']),
+            use_container_width=True,
+            hide_index=True
+        )
     
 
 # --- Main Dashboard Layout ---
@@ -579,8 +629,11 @@ kraken_time = fetch_kraken_time()
 col3_time.metric("Kraken Server Time", kraken_time)
 
 
-# 2. MTFA CONFLUENCE SCORE (New Section)
+# ---
 st.markdown("---")
+# ---
+
+# 2. MTFA CONFLUENCE SCORE
 st.header(f"2. Multi-Time Frame Confluence Score")
 
 score, signal, factors, color_class = get_confluence_score(htf_df.copy(), etf_df.copy(), selected_htf_label, selected_etf_label)
@@ -603,8 +656,11 @@ with col_details:
         st.markdown(f"- {factor}")
 
 
-# 3. AUTOMATED TA SIGNAL MATRIX (Uses Entry Time Frame)
+# ---
 st.markdown("---")
+# ---
+
+# 3. AUTOMATED TA SIGNAL MATRIX (Uses Entry Time Frame)
 st.header(f"3. Automated TA Signal Matrix ({selected_etf_label})")
 
 if not etf_df.empty and len(etf_df) >= 200:
@@ -630,9 +686,18 @@ else:
     st.warning(f"Not enough historical data available for the Entry Time Frame ({selected_etf_label}) or bar count ({bar_count}). Need at least 200 bars for robust TA.")
 
 
-# 4. DATA FEED HEALTH MONITOR
+# ---
 st.markdown("---")
-st.header("4. Data Feed Health Monitor")
-st.info("Click 'Run Data Feed Health Check' in the sidebar to monitor connections.")
+# ---
 
-# (Rest of the UI sections remain the same)
+# 4. TECHNICAL INDICATOR GLOSSARY (NEW SECTION)
+st.header("4. Technical Indicator Glossary")
+st.info("Expand the sections below to review the purpose and signaling logic for each indicator.")
+
+for key, data in INDICATOR_GLOSSARY.items():
+    with st.expander(f"**{data['title']}** ({data['type']})"):
+        st.markdown(f"<p class='text-gray-700'>{data['description']}</p>", unsafe_allow_html=True)
+
+# ---
+st.markdown("---")
+# ---
