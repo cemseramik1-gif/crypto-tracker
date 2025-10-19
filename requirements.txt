@@ -4,3 +4,4 @@ numpy
 plotly
 pandas_ta
 requests
+import plotly.graph_objects as go
