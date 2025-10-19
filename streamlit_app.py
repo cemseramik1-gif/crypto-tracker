@@ -123,7 +123,7 @@ def fetch_btc_data():
         print(f"Could not fetch live Bitcoin data from Kraken: {e}") 
         return None, None
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=15)
 def fetch_historical_data(interval_code, count, label):
     """Fetches OHLC data from Kraken for TA."""
     params = {'pair': 'XBTUSD', 'interval': interval_code} 
@@ -222,25 +222,25 @@ def calculate_ta(df):
         return df
     
     try: 
-        # 1. Momentum
+        # 1. Momentum (RSI, MACD, StochOsc, CCI, WilliamsR)
         df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True) # MACD calculation
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         df.ta.cci(length=20, append=True)
         df.ta.williamsr(length=14, append=True)
 
-        # 2. Trend
+        # 2. Trend (EMA, ADX, Ichimoku)
         df.ta.ema(length=[9, 21, 50, 200], append=True)
         df.ta.adx(length=14, append=True)
         df.ta.ichimoku(append=True)
 
-        # 3. Volume & Flow
+        # 3. Volume & Flow (VWAP, OBV, MFI, CMF)
         df.ta.vwap(append=True) 
         df.ta.obv(append=True)
         df.ta.mfi(length=14, append=True)
         df.ta.cmf(length=20, append=True)
 
-        # 4. Volatility
+        # 4. Volatility (BBANDS, ATR)
         df.ta.bbands(length=20, std=2, append=True)
         df.ta.atr(length=14, append=True)
     except Exception as e:
@@ -264,9 +264,9 @@ def get_indicator_signal(df):
     
     # --- RESILIENCE CHECK ---
     if df.empty or len(df) < 200:
-        error_item = {'name': 'Data Error', 'value': 'N/A', 'signal': 'Data Incomplete (<200 bars)'}
+        error_item = {'name': 'Data Error', 'value': 'N/A', 'signal': 'Data Insufficient (<200 bars required)'}
         for group in signals.keys():
-            # Populate every group with an error message instead of returning empty dict
+            # Populate every group with an error message for resilience
             signals[group].append(error_item) 
         return signals
 
@@ -286,7 +286,7 @@ def get_indicator_signal(df):
         elif rsi_val < 45: rsi_signal = "Bearish (Falling)"
         signals["Momentum"].append({'name': 'RSI (14)', 'value': f"{rsi_val:,.1f}", 'signal': rsi_signal})
     
-    # MACD Histogram (Explicitly requested)
+    # MACD Histogram 
     macd_hist = lookup_value(df, 'MACDH_12_26_9')
     macd_signal = "Neutral"
     if macd_hist is not None:
@@ -423,8 +423,6 @@ def get_indicator_signal(df):
         signals["Volatility"].append({'name': 'ATR (14)', 'value': f"${atr_val:,.2f}", 'signal': atr_signal})
         
     return signals
-
-# ... (get_confluence_score remains unchanged) ...
 
 def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
     """
@@ -703,10 +701,12 @@ for group_name, signals in ta_signals_grouped.items():
     st.subheader(f"📊 {group_name} Indicators")
     
     num_signals = len(signals)
+    # Ensure columns don't exceed the number of available signals
     num_columns = min(num_signals, 5)
     
     for i in range(0, num_signals, 5):
         row_signals = signals[i:i+5]
+        # Create columns based on the number of signals in the current row
         cols = st.columns(len(row_signals)) 
         
         for j, item in enumerate(row_signals):
