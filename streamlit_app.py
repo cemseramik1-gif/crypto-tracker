@@ -98,17 +98,39 @@ INDICATOR_GLOSSARY = {
 # --- 2. UTILITY FUNCTIONS ---
 
 def safe_column_lookup(df, prefix):
-    """Safely looks up a column by prefix to prevent StopIteration/KeyError."""
+    """
+    Safely looks up a column by prefix (e.g., 'RSI_14_') to prevent KeyError.
+    Returns the full column name if found, otherwise returns None.
+    """
     try:
-        # Find the first column that starts with the required prefix (e.g., 'BBU_', 'ADX_')
-        return df.columns[df.columns.str.startswith(prefix)][-1]
+        # Find the first column that starts with the required prefix
+        # [-1] is used to grab the latest version if multiple exist, but usually it's just one.
+        col_name = df.columns[df.columns.str.startswith(prefix)][-1]
+        return col_name
     except IndexError:
-        # Return a non-existent name if not found, which will lead to a controlled NaN
-        return f"MISSING_{prefix}"
+        # Column not found in the DataFrame
+        return None
+
+def lookup_value(df, prefix, index=-1):
+    """
+    Robustly looks up an indicator value by prefix and index.
+    Returns the float value if found and not NaN, otherwise returns None.
+    """
+    col_name = safe_column_lookup(df, prefix)
+    if col_name is None:
+        return None
+    try:
+        val = df[col_name].iloc[index]
+        # Check for both standard NaN and pandas' internal NA
+        if pd.isna(val) or math.isnan(val):
+            return None
+        return val
+    except Exception:
+        # Catch any remaining KeyError/IndexError/TypeErrors
+        return None
 
 def get_kraken_interval_code(interval_label):
     """Maps human-readable interval to Kraken API code."""
-    # NOTE: 2-hour (120 min) is NOT supported by Kraken OHLC and was removed.
     interval_map = {
         "1 min": 1,
         "5 min": 5,
@@ -135,11 +157,9 @@ def get_html_color_class(signal):
 def get_glossary_html(glossary):
     """
     Generates a series of HTML elements for a collapsible glossary.
-    This replaces the original simple text glossary.
     """
     html_parts = []
     
-    # Generate the header and content for each indicator
     for key, data in glossary.items():
         unique_id = uuid.uuid4().hex[:8] 
 
@@ -216,12 +236,10 @@ def fetch_kraken_time():
 def fetch_btc_data():
     """Fetches the latest Bitcoin price and volume from Kraken."""
     try:
-        # Use XBTUSD (Bitcoin-US Dollar) pair which is standard on Kraken
         response = requests.get(KRAKEN_API_URL + "Ticker?pair=XBTUSD", timeout=5)
         response.raise_for_status()
         data = response.json()['result']
 
-        # Kraken uses various keys like 'XXBTZUSD' or 'XBTUSD', find the correct one dynamically
         btc_key = next(k for k in data.keys() if 'XBT' in k)
         
         price = float(data[btc_key]['c'][0])
@@ -234,7 +252,6 @@ def fetch_btc_data():
 @st.cache_data(ttl=120)
 def fetch_historical_data(interval_code, count):
     """Fetches OHLC data from Kraken for TA."""
-    # 'pair' must be capitalized and exact. 'XBTUSD' is the Kraken code for BTC/USD
     params = {'pair': 'XBTUSD', 'interval': interval_code} 
     
     try:
@@ -242,7 +259,6 @@ def fetch_historical_data(interval_code, count):
         response.raise_for_status()
         data = response.json()['result']
         
-        # Kraken keys can be dynamic (e.g., 'XXBTZUSD'), find the correct data key
         data_key = next(k for k in data.keys() if k != 'last')
         candles = data[data_key]
         
@@ -279,7 +295,7 @@ def run_all_checks():
             api_configs[i]['status'] = "UP"
             api_configs[i]['latency'] = f"{latency:.0f}ms"
             api_configs[i]['status_detail'] = status
-            api_configs[i]['last_data'] = data
+            api_configs[i]['last_data'] = data.get('result', data) if isinstance(data, dict) else str(data)
         except Exception as e:
             api_configs[i]['status'] = "Error"
             api_configs[i]['latency'] = "N/A"
@@ -304,8 +320,9 @@ def check_kraken_time(url):
     end_time = datetime.now()
     latency = (end_time - start_time).total_seconds() * 1000
     
-    if response.json()['result']['unixtime']:
-        return "OK (Kraken Time OK)", latency, response.json()
+    response_json = response.json()
+    if 'result' in response_json and 'unixtime' in response_json['result']:
+        return "OK (Kraken Time OK)", latency, response_json
     else:
         raise Exception("Time field missing in Kraken response.")
 
@@ -316,24 +333,12 @@ def get_indicator_signal(df):
     if df.empty or len(df) < 200:
         return {} # Not enough data for robust TA
 
-    # 1. Calculate all indicators using pandas_ta (200-period lookback ensures stability)
-    df.ta.strategy("All") # This calculates all standard indicators
+    # Calculate all indicators using pandas_ta
+    df.ta.strategy("All")
     
-    # Ensure the latest close price is valid for comparison
     latest_close = df['close'].iloc[-1]
-    
-    # Initialize dictionary to hold results
     signals = {}
 
-    # --- Utility for robust column lookup ---
-    def lookup_value(df, prefix):
-        col_name = safe_column_lookup(df, prefix)
-        try:
-            val = df[col_name].iloc[-1]
-            return val if not math.isnan(val) else None
-        except:
-            return None # Handle KeyError or IndexError gracefully
-        
     # --- MOMENTUM INDICATORS ---
 
     # 1. RSI (14)
@@ -347,12 +352,12 @@ def get_indicator_signal(df):
     
     # 2. MACD (12, 26, 9)
     macd_line = lookup_value(df, 'MACD_12_26_9')
-    macd_signal_line = lookup_value(df, 'MACDH_12_26_9') # Note: MACDH is Histogram
-    macd_hist = lookup_value(df, 'MACDs_12_26_9') # Note: MACDs is Signal Line
+    macd_hist = lookup_value(df, 'MACDH_12_26_9')
+    macd_signal_line = lookup_value(df, 'MACDs_12_26_9')
     macd_signal = "Neutral"
-    if macd_line is not None and macd_hist is not None:
-        if macd_line > macd_hist and macd_hist < 0: macd_signal = "Bullish Crossover"
-        elif macd_line < macd_hist and macd_hist > 0: macd_signal = "Bearish Crossover"
+    if macd_line is not None and macd_signal_line is not None:
+        if macd_line > macd_signal_line and macd_hist < 0: macd_signal = "Bullish Crossover"
+        elif macd_line < macd_signal_line and macd_hist > 0: macd_signal = "Bearish Crossover"
         
     # 3. Stochastic Oscillator (14, 3, 3)
     k_line = lookup_value(df, 'STOCHk_14_3_3')
@@ -400,7 +405,6 @@ def get_indicator_signal(df):
         else: adx_signal = f"Neutral ({strength})"
 
     # 8. Ichimoku Cloud (9, 26, 52)
-    # Use the Senkou Span A (SSA) and Senkou Span B (SSB) to determine Cloud trend
     ssa_val = lookup_value(df, 'ISA_9_26')
     ssb_val = lookup_value(df, 'ISB_9_26')
     ichimoku_signal = "Neutral"
@@ -415,12 +419,11 @@ def get_indicator_signal(df):
 
     # 9. On-Balance Volume (OBV)
     obv_val = lookup_value(df, 'OBV')
-    # Simple OBV signal: rising OBV confirms a rising price (Bullish)
+    obv_prev = lookup_value(df, 'OBV', index=-2) # Get previous value
     obv_signal = "Neutral"
-    if obv_val is not None and len(df) > 2:
-        # Check if latest OBV is higher than the previous bar (simple momentum)
-        if obv_val > df['OBV'].iloc[-2]: obv_signal = "Bullish (Volume Confirmation)"
-        elif obv_val < df['OBV'].iloc[-2]: obv_signal = "Bearish (Volume Divergence)"
+    if obv_val is not None and obv_prev is not None:
+        if obv_val > obv_prev: obv_signal = "Bullish (Volume Confirmation)"
+        elif obv_val < obv_prev: obv_signal = "Bearish (Volume Divergence)"
 
     # 10. Money Flow Index (MFI) (14)
     mfi_val = lookup_value(df, 'MFI_14')
@@ -448,7 +451,7 @@ def get_indicator_signal(df):
     # --- VOLATILITY INDICATORS ---
 
     # 13. Bollinger Bands (20, 2)
-    upper_band = lookup_value(df, 'BBU_20_2') # Use robust lookup names
+    upper_band = lookup_value(df, 'BBU_20_2')
     median_band = lookup_value(df, 'BBM_20_2')
     lower_band = lookup_value(df, 'BBL_20_2')
     bb_signal = "Neutral"
@@ -458,52 +461,50 @@ def get_indicator_signal(df):
         
     # 14. Average True Range (ATR)
     atr_val = lookup_value(df, 'ATR_14')
+    atr_prev = lookup_value(df, 'ATR_14', index=-2)
     atr_signal = "Neutral"
-    if atr_val is not None and len(df) > 2:
-        # Check if volatility is expanding or contracting (simple comparison to previous bar)
-        if atr_val > df['ATR_14'].iloc[-2]: atr_signal = "Expansion (Volatility Rising)"
+    if atr_val is not None and atr_prev is not None:
+        if atr_val > atr_prev: atr_signal = "Expansion (Volatility Rising)"
         else: atr_signal = "Contraction (Volatility Falling)"
 
     # --- Format Values for Display ---
     
     # VWAP
-    vwap_val_str = "N/A"
-    if vwap_val is not None and not math.isnan(vwap_val):
-        vwap_val_str = f"${vwap_val:,.0f}"
+    vwap_val_str = f"${vwap_val:,.0f}" if vwap_val is not None else "N/A"
 
     # BBANDS (Formatted to show U | M | L)
-    bb_val_str = "N/A"
     if upper_band is not None and median_band is not None and lower_band is not None:
         bb_val_str = f"U:{upper_band:,.0f} | M:{median_band:,.0f} | L:{lower_band:,.0f}"
+    else:
+        bb_val_str = "N/A"
         
     # MACD (Formatted to show M | S | H)
-    macd_val_str = "N/A"
     if macd_line is not None and macd_signal_line is not None and macd_hist is not None:
-        macd_val_str = f"M:{macd_line:,.2f} | S:{macd_hist:,.2f} | H:{macd_signal_line:,.2f}"
+        macd_val_str = f"M:{macd_line:,.2f} | S:{macd_signal_line:,.2f} | H:{macd_hist:,.2f}"
+    else:
+        macd_val_str = "N/A"
 
     # ADX (Formatted to show ADX | +DI | -DI)
-    adx_val_str = "N/A"
     if adx_val is not None and di_plus is not None and di_minus is not None:
         adx_val_str = f"ADX:{adx_val:,.1f} | +DI:{di_plus:,.1f} | -DI:{di_minus:,.1f}"
+    else:
+        adx_val_str = "N/A"
 
     # Stoch (Formatted to show %K | %D)
-    stoch_val_str = "N/A"
-    if k_line is not None and d_line is not None:
-        stoch_val_str = f"%K:{k_line:,.1f} | %D:{d_line:,.1f}"
+    stoch_val_str = f"%K:{k_line:,.1f} | %D:{d_line:,.1f}" if k_line is not None and d_line is not None else "N/A"
 
     # ATR (Formatted to show current ATR value)
-    atr_val_str = "N/A"
-    if atr_val is not None and not math.isnan(atr_val):
-        atr_val_str = f"${atr_val:,.2f}"
+    atr_val_str = f"${atr_val:,.2f}" if atr_val is not None else "N/A"
         
-    # CMF/MFI (Formatted to show simple value)
-    cmf_val_str = f"{cmf_val:,.2f}" if cmf_val is not None and not math.isnan(cmf_val) else "N/A"
-    mfi_val_str = f"{mfi_val:,.1f}" if mfi_val is not None and not math.isnan(mfi_val) else "N/A"
-    wpr_val_str = f"{wpr_val:,.1f}" if wpr_val is not None and not math.isnan(wpr_val) else "N/A"
-    cci_val_str = f"{cci_val:,.0f}" if cci_val is not None and not math.isnan(cci_val) else "N/A"
+    # CMF/MFI/WPR/CCI/RSI (Formatted to show simple value)
+    cmf_val_str = f"{cmf_val:,.2f}" if cmf_val is not None else "N/A"
+    mfi_val_str = f"{mfi_val:,.1f}" if mfi_val is not None else "N/A"
+    wpr_val_str = f"{wpr_val:,.1f}" if wpr_val is not None else "N/A"
+    cci_val_str = f"{cci_val:,.0f}" if cci_val is not None else "N/A"
+    rsi_val_str = f"{rsi_val:,.1f}" if rsi_val is not None else "N/A"
     
-    # RSI (Formatted to show simple value)
-    rsi_val_str = f"{rsi_val:,.1f}" if rsi_val is not None and not math.isnan(rsi_val) else "N/A"
+    # Handle latest close if it failed
+    latest_close_str = f"{latest_close:,.0f}" if latest_close is not None else "N/A"
 
     # Assemble final signals dictionary, grouped by type
     signals = {
@@ -515,7 +516,7 @@ def get_indicator_signal(df):
             {'name': 'CCI', 'value': cci_val_str, 'signal': cci_signal},
         ],
         "Trend": [
-            {'name': 'EMA 9/21/50/200', 'value': f"Last Close: {latest_close:,.0f}", 'signal': ema_signal},
+            {'name': 'EMA 9/21/50/200', 'value': f"Last Close: {latest_close_str}", 'signal': ema_signal},
             {'name': 'ADX', 'value': adx_val_str, 'signal': adx_signal},
             {'name': 'Ichimoku Cloud', 'value': "Cloud Status", 'signal': ichimoku_signal},
         ],
@@ -539,41 +540,49 @@ def get_divergence_alerts(df):
         return []
 
     alerts = []
-    latest_close = df['close'].iloc[-1]
     
-    # Use the robust lookup utility
-    mfi_val = df[safe_column_lookup(df, 'MFI_14')].iloc[-1]
-    cmf_val = df[safe_column_lookup(df, 'CMF_20')].iloc[-1]
-    atr_val = df[safe_column_lookup(df, 'ATR_14')].iloc[-1]
+    # Use the robust lookup_value utility
+    latest_close = lookup_value(df, 'close')
+    mfi_val = lookup_value(df, 'MFI_14')
+    mfi_prev = lookup_value(df, 'MFI_14', index=-2)
+    cmf_val = lookup_value(df, 'CMF_20')
+    cmf_prev = lookup_value(df, 'CMF_20', index=-2)
+    atr_val = lookup_value(df, 'ATR_14')
     
+    # Need previous close for divergence checks
+    close_prev = lookup_value(df, 'close', index=-2)
+
+
     # 1. MFI Extreme Reversal Alert
-    if not math.isnan(mfi_val):
-        if mfi_val < 30 and df[safe_column_lookup(df, 'MFI_14')].iloc[-2] < 30 and df['close'].iloc[-2] < latest_close:
-            alerts.append({"type": "Long", "message": f"MFI ({mfi_val:,.0f}) is Oversold and showing Bullish reversal on volume. Potential bounce.", "color": "green"})
-        elif mfi_val > 70 and df[safe_column_lookup(df, 'MFI_14')].iloc[-2] > 70 and df['close'].iloc[-2] > latest_close:
-            alerts.append({"type": "Short", "message": f"MFI ({mfi_val:,.0f}) is Overbought and showing Bearish reversal on volume. Potential drop.", "color": "red"})
+    if mfi_val is not None and mfi_prev is not None and latest_close is not None and close_prev is not None:
+        if mfi_val < 30 and mfi_prev < 30 and close_prev < latest_close:
+            alerts.append({"type": "Long", "message": f"MFI ({mfi_val:,.0f}) is **Oversold** and showing Bullish reversal on volume. Potential bounce.", "color": "green"})
+        elif mfi_val > 70 and mfi_prev > 70 and close_prev > latest_close:
+            alerts.append({"type": "Short", "message": f"MFI ({mfi_val:,.0f}) is **Overbought** and showing Bearish reversal on volume. Potential drop.", "color": "red"})
 
     # 2. CMF Zero Cross Alert
-    if not math.isnan(cmf_val) and len(df) >= 2:
-        cmf_prev = df[safe_column_lookup(df, 'CMF_20')].iloc[-2]
+    if cmf_val is not None and cmf_prev is not None:
         if cmf_prev < 0 and cmf_val >= 0:
-            alerts.append({"type": "Long", "message": f"CMF crossed ZERO (Accumulation) line. Shift from distribution to buying pressure.", "color": "green"})
+            alerts.append({"type": "Long", "message": f"CMF crossed **ZERO** (Accumulation) line. Shift from distribution to buying pressure.", "color": "green"})
         elif cmf_prev > 0 and cmf_val <= 0:
-            alerts.append({"type": "Short", "message": f"CMF crossed ZERO (Distribution) line. Shift from accumulation to selling pressure.", "color": "red"})
+            alerts.append({"type": "Short", "message": f"CMF crossed **ZERO** (Distribution) line. Shift from accumulation to selling pressure.", "color": "red"})
 
     # 3. Volume/Price Disparity Alert (Absorption/Exhaustion)
-    # Check if current bar volume is much higher than average AND candle range is small relative to ATR
-    if not math.isnan(atr_val) and len(df) >= 20 and not math.isnan(cmf_val):
-        avg_volume = df['volume'].tail(20).mean()
-        current_volume = df['volume'].iloc[-1]
-        current_range = df['high'].iloc[-1] - df['low'].iloc[-1]
+    # This requires more data than what lookup_value provides, so we ensure the columns exist first.
+    if atr_val is not None and cmf_val is not None and latest_close is not None and 'volume' in df.columns:
         
-        # High volume (150% of average) and small range (less than 50% of ATR)
-        if current_volume > (avg_volume * 1.5) and current_range < (atr_val * 0.5):
-            if cmf_val > 0.1: # High Volume + Tight Range + Accumulation (Bullish Absorption)
-                alerts.append({"type": "Long", "message": f"VOLUME/PRICE DISPARITY: High volume absorption with tight range and positive CMF. Demand is strong, supply is being absorbed.", "color": "green"})
-            elif cmf_val < -0.1: # High Volume + Tight Range + Distribution (Bearish Exhaustion)
-                alerts.append({"type": "Short", "message": f"VOLUME/PRICE DISPARITY: High volume exhaustion with tight range and negative CMF. Supply is strong, demand is exhausting.", "color": "red"})
+        # Calculate moving average volume over last 20 bars
+        if len(df) >= 20:
+            avg_volume = df['volume'].iloc[-20:].mean()
+            current_volume = df['volume'].iloc[-1]
+            current_range = df['high'].iloc[-1] - df['low'].iloc[-1]
+            
+            # High volume (150% of average) and small range (less than 50% of ATR)
+            if current_volume > (avg_volume * 1.5) and current_range < (atr_val * 0.5):
+                if cmf_val > 0.1: # High Volume + Tight Range + Accumulation (Bullish Absorption)
+                    alerts.append({"type": "Long", "message": f"VOLUME/PRICE DISPARITY: High volume absorption with tight range and positive CMF. Demand is strong, supply is being absorbed.", "color": "green"})
+                elif cmf_val < -0.1: # High Volume + Tight Range + Distribution (Bearish Exhaustion)
+                    alerts.append({"type": "Short", "message": f"VOLUME/PRICE DISPARITY: High volume exhaustion with tight range and negative CMF. Supply is strong, demand is exhausting.", "color": "red"})
 
     return alerts
 
@@ -601,13 +610,13 @@ st.markdown(
         border-radius: 0.75rem;
         border-width: 1px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
-        min-height: 120px; /* Increased height for better visibility */
+        min-height: 120px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
     }
     .tile-value {
-        font-size: 1.25rem; /* Large font for value */
+        font-size: 1.25rem;
         font-weight: 700;
         line-height: 1.5;
         text-align: center;
@@ -634,7 +643,7 @@ st.markdown(
 
 # --- Sidebar (Configuration & Instructions) ---
 with st.sidebar:
-    st.image("https://placehold.co/150x50/3b82f6/ffffff?text=XBT+Monitor")
+    st.image("https://placehold.co/150x50/1e3a8a/ffffff?text=XBT+Monitor")
     st.markdown("## Configuration")
 
     # Timeframe Selector
@@ -706,13 +715,17 @@ st.header("2. Tactical Reversal Alerts")
 if not historical_df.empty:
     alerts = get_divergence_alerts(historical_df)
     if alerts:
-        alert_cols = st.columns(len(alerts))
+        # Use columns up to a max of 4 for small screen readability
+        num_alerts = len(alerts)
+        alert_cols = st.columns(min(num_alerts, 4)) 
         for i, alert in enumerate(alerts):
+            # Fallback to the same column index if we run out of columns
+            col_index = i % 4 
             color = alert['color']
-            alert_cols[i].markdown(f"""
+            alert_cols[col_index].markdown(f"""
                 <div style="background-color: {'#d1e7dd' if color == 'green' else '#f8d7da'}; 
                              border: 1px solid {'#a3cfbb' if color == 'green' else '#f5c6cb'}; 
-                             padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                             padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px;">
                     <p style="font-weight: bold; color: {'#0f5132' if color == 'green' else '#842029'}; margin: 0; font-size: 1rem;">
                         {alert['type']} OPPORTUNITY
                     </p>
@@ -734,7 +747,8 @@ if not historical_df.empty:
     
     for group_name, signals in ta_signals_grouped.items():
         st.subheader(f"📊 {group_name} Indicators")
-        cols = st.columns(len(signals))
+        # Use 5 columns for a tight, dashboard look
+        cols = st.columns(5) 
         
         for i, item in enumerate(signals):
             # Get color class based on signal
