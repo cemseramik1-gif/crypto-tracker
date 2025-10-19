@@ -3,6 +3,8 @@ import requests
 import time
 import json
 import pandas as pd
+import numpy as np # Used for checking types and NaN handling
+import math # Used for math.isnan() check
 from datetime import datetime, timezone, timedelta
 import pandas_ta as ta # Import the technical analysis library
 
@@ -32,7 +34,7 @@ KRAKEN_INTERVALS = {
     "1 week": 10080,
 }
 
-# The INITIAL_CONFIG list for the health check section (Section 1)
+# The INITIAL_CONFIG list for the health check section
 INITIAL_CONFIG = [
     {"id": 1, "name": "Blockchain (BTC BlockCypher)", "url": "https://api.blockcypher.com/v1/btc/main", "status": "Pending", "last_check": None, "last_result": ""},
     {"id": 2, "name": "Kraken API (Stable Time)", "url": f"{KRAKEN_API_URL}/0/public/Time", "status": "Pending", "last_check": None, "last_result": ""},
@@ -106,7 +108,7 @@ def fetch_historical_data(interval_minutes, count=300):
         
         # Convert types and set index
         df['Time'] = pd.to_datetime(df['Time'], unit='s', utc=True)
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume', 'VWAP']: # Added VWAP here to ensure it's a float
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # Limit to the most recent 'count' bars and drop the last (potentially partial) bar
@@ -163,94 +165,118 @@ def get_indicator_signal(df):
     
     # --- Momentum Indicators ---
     
-    # RSI
+    # RSI (FIX: Added NaN check)
     rsi_col = safe_column_lookup(df, 'RSI_')
     if rsi_col:
         rsi_val = df[rsi_col].iloc[-1]
-        rsi_val_str = f"{rsi_val:.2f}"
-        if rsi_val > 70:
-            signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
-        elif rsi_val < 30:
-            signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
+        
+        if math.isnan(rsi_val):
+            signals['Momentum']['RSI (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
+            rsi_val_str = f"{rsi_val:.2f}"
+            if rsi_val > 70:
+                signals['Momentum']['RSI (14)'] = ('Bearish', f"Overbought ({rsi_val_str})", rsi_val_str)
+            elif rsi_val < 30:
+                signals['Momentum']['RSI (14)'] = ('Bullish', f"Oversold ({rsi_val_str})", rsi_val_str)
+            else:
+                signals['Momentum']['RSI (14)'] = ('Neutral', f"Mid-Range ({rsi_val_str})", rsi_val_str)
     else:
         signals['Momentum']['RSI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # Stochastic Oscillator
+    # Stochastic Oscillator (FIX: Added NaN check)
     stoch_k_col = safe_column_lookup(df, 'STOCHk_')
     if stoch_k_col:
         k = df[stoch_k_col].iloc[-1]
-        k_str = f"{k:.2f}"
-        if k > 80:
-            signals['Momentum']['Stochastic (14,3,3)'] = ('Bearish', f"Overbought (%K={k_str})", k_str)
-        elif k < 20:
-            signals['Momentum']['Stochastic (14,3,3)'] = ('Bullish', f"Oversold (%K={k_str})", k_str)
+        
+        if math.isnan(k):
+             signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k_str})", k_str)
+            k_str = f"{k:.2f}"
+            if k > 80:
+                signals['Momentum']['Stochastic (14,3,3)'] = ('Bearish', f"Overbought (%K={k_str})", k_str)
+            elif k < 20:
+                signals['Momentum']['Stochastic (14,3,3)'] = ('Bullish', f"Oversold (%K={k_str})", k_str)
+            else:
+                signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k_str})", k_str)
     else:
         signals['Momentum']['Stochastic (14,3,3)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
-    # CCI
+    # CCI (FIX: Added NaN check)
     cci_col = safe_column_lookup(df, 'CCI_')
     if cci_col:
         cci_val = df[cci_col].iloc[-1]
-        cci_val_str = f"{cci_val:.2f}"
-        if cci_val > 100:
-            signals['Momentum']['CCI (14)'] = ('Bearish', f"Extreme Overbought ({cci_val_str})", cci_val_str)
-        elif cci_val < -100:
-            signals['Momentum']['CCI (14)'] = ('Bullish', f"Extreme Oversold ({cci_val_str})", cci_val_str)
+        
+        if math.isnan(cci_val):
+             signals['Momentum']['CCI (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Momentum']['CCI (14)'] = ('Neutral', f"Between -100 and +100 ({cci_val_str})", cci_val_str)
+            cci_val_str = f"{cci_val:.2f}"
+            if cci_val > 100:
+                signals['Momentum']['CCI (14)'] = ('Bearish', f"Extreme Overbought ({cci_val_str})", cci_val_str)
+            elif cci_val < -100:
+                signals['Momentum']['CCI (14)'] = ('Bullish', f"Extreme Oversold ({cci_val_str})", cci_val_str)
+            else:
+                signals['Momentum']['CCI (14)'] = ('Neutral', f"Between -100 and +100 ({cci_val_str})", cci_val_str)
     else:
         signals['Momentum']['CCI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
-    # MFI
+    # MFI (FIX: Added NaN check)
     mfi_col = safe_column_lookup(df, 'MFI_')
     if mfi_col:
         mfi_val = df[mfi_col].iloc[-1]
-        mfi_val_str = f"{mfi_val:.2f}"
-        if mfi_val > 80:
-            signals['Momentum']['MFI (14)'] = ('Bearish', f"Overbought ({mfi_val_str})", mfi_val_str)
-        elif mfi_val < 20:
-            signals['Momentum']['MFI (14)'] = ('Bullish', f"Oversold ({mfi_val_str})", mfi_val_str)
+        
+        if math.isnan(mfi_val):
+             signals['Momentum']['MFI (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Momentum']['MFI (14)'] = ('Neutral', f"Mid-Range ({mfi_val_str})", mfi_val_str)
+            mfi_val_str = f"{mfi_val:.2f}"
+            if mfi_val > 80:
+                signals['Momentum']['MFI (14)'] = ('Bearish', f"Overbought ({mfi_val_str})", mfi_val_str)
+            elif mfi_val < 20:
+                signals['Momentum']['MFI (14)'] = ('Bullish', f"Oversold ({mfi_val_str})", mfi_val_str)
+            else:
+                signals['Momentum']['MFI (14)'] = ('Neutral', f"Mid-Range ({mfi_val_str})", mfi_val_str)
     else:
         signals['Momentum']['MFI (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # Williams %R
+    # Williams %R (FIX: Added NaN check)
     willr_col = safe_column_lookup(df, 'WMR_') or safe_column_lookup(df, 'WILLR_')
     if willr_col:
         willr_val = df[willr_col].iloc[-1]
-        willr_val_str = f"{willr_val:.2f}"
-        if willr_val > -20: 
-            signals['Momentum']['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val_str})", willr_val_str)
-        elif willr_val < -80: 
-            signals['Momentum']['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val_str})", willr_val_str)
+        
+        if math.isnan(willr_val):
+             signals['Momentum']['Williams %R (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Momentum']['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val_str})", willr_val_str)
+            willr_val_str = f"{willr_val:.2f}"
+            if willr_val > -20: 
+                signals['Momentum']['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val_str})", willr_val_str)
+            elif willr_val < -80: 
+                signals['Momentum']['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val_str})", willr_val_str)
+            else:
+                signals['Momentum']['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val_str})", willr_val_str)
     else:
         signals['Momentum']['Williams %R (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
     # --- Trend Indicators ---
 
-    # MACD
+    # MACD (FIX: Added NaN check)
     macd_hist_col = safe_column_lookup(df, 'MACDh_')
     if macd_hist_col:
         macd_hist = df[macd_hist_col].iloc[-1]
-        macd_hist_str = f"{macd_hist:.4f}"
-        if macd_hist > 0:
-            signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
-        elif macd_hist < 0:
-            signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
+
+        if math.isnan(macd_hist):
+             signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
+            macd_hist_str = f"{macd_hist:.4f}"
+            if macd_hist > 0:
+                signals['Trend']['MACD (12,26,9)'] = ('Bullish', f"Histogram > 0 ({macd_hist_str})", macd_hist_str)
+            elif macd_hist < 0:
+                signals['Trend']['MACD (12,26,9)'] = ('Bearish', f"Histogram < 0 ({macd_hist_str})", macd_hist_str)
+            else:
+                signals['Trend']['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0", macd_hist_str)
     else:
         signals['Trend']['MACD (12,26,9)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # ADX (Fix implemented here)
+    # ADX (FIX: Added NaN check for all components)
     adx_col = safe_column_lookup(df, 'ADX_')
     di_plus_col = safe_column_lookup(df, 'DMP_')
     di_minus_col = safe_column_lookup(df, 'DMM_')
@@ -260,125 +286,159 @@ def get_indicator_signal(df):
         di_plus = df[di_plus_col].iloc[-1]
         di_minus = df[di_minus_col].iloc[-1]
         
-        adx_str = f"{adx:.2f}"
-        strength = "Weak"
-        if adx > 25: strength = "Strong"
-        elif adx > 20: strength = "Developing"
-        if di_plus > di_minus:
-            signals['Trend']['ADX (14)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)", adx_str)
-        elif di_minus > di_plus:
-            signals['Trend']['ADX (14)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)", adx_str)
+        if math.isnan(adx) or math.isnan(di_plus) or math.isnan(di_minus):
+            signals['Trend']['ADX (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Trend']['ADX (14)'] = ('Neutral', f"No Clear Trend Direction ({strength})", adx_str)
+            adx_str = f"{adx:.2f}"
+            strength = "Weak"
+            if adx > 25: strength = "Strong"
+            elif adx > 20: strength = "Developing"
+            
+            if di_plus > di_minus:
+                signals['Trend']['ADX (14)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)", adx_str)
+            elif di_minus > di_plus:
+                signals['Trend']['ADX (14)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)", adx_str)
+            else:
+                signals['Trend']['ADX (14)'] = ('Neutral', f"No Clear Trend Direction ({strength})", adx_str)
     else:
         signals['Trend']['ADX (14)'] = ('Neutral', 'N/A (Error in calculation)', 'N/A')
 
 
-    # Ichimoku Cloud
+    # Ichimoku Cloud (FIX: Added NaN check for span_a/b)
     span_a_col = safe_column_lookup(df, 'ISA_')
     span_b_col = safe_column_lookup(df, 'ISB_')
 
     if span_a_col and span_b_col:
         span_a = df[span_a_col].iloc[-1]
         span_b = df[span_b_col].iloc[-1]
-        cloud_top = max(span_a, span_b)
-        cloud_bottom = min(span_a, span_b)
-        if close > cloud_top:
-            signals['Trend']['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close_str})", close_str)
-        elif close < cloud_bottom:
-            signals['Trend']['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close_str})", close_str)
+        
+        if math.isnan(span_a) or math.isnan(span_b):
+             signals['Trend']['Ichimoku Cloud'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Trend']['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close_str})", close_str)
+            cloud_top = max(span_a, span_b)
+            cloud_bottom = min(span_a, span_b)
+            if close > cloud_top:
+                signals['Trend']['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close_str})", close_str)
+            elif close < cloud_bottom:
+                signals['Trend']['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close_str})", close_str)
+            else:
+                signals['Trend']['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close_str})", close_str)
     else:
         signals['Trend']['Ichimoku Cloud'] = ('Neutral', 'N/A (Error)', 'N/A')
     
-    # EMA Signals
+    # EMA Signals (FIX: Added NaN check inside loop)
     ema_lengths = [9, 21, 50, 200]
     for length in ema_lengths:
         try:
             ema_col = f'EMA_{length}'
             ema_val = df[ema_col].iloc[-1]
-            ema_val_str = f"${ema_val:,.0f}"
             
-            if close > ema_val:
-                signals['Trend'][f'EMA ({length})'] = ('Bullish', f"Price above EMA ({close_str})", ema_val_str)
-            elif close < ema_val:
-                signals['Trend'][f'EMA ({length})'] = ('Bearish', f"Price below EMA ({close_str})", ema_val_str)
+            if math.isnan(ema_val):
+                signals['Trend'][f'EMA ({length})'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
             else:
-                signals['Trend'][f'EMA ({length})'] = ('Neutral', f"Price at EMA ({close_str})", ema_val_str)
+                ema_val_str = f"${ema_val:,.0f}"
+                if close > ema_val:
+                    signals['Trend'][f'EMA ({length})'] = ('Bullish', f"Price above EMA ({close_str})", ema_val_str)
+                elif close < ema_val:
+                    signals['Trend'][f'EMA ({length})'] = ('Bearish', f"Price below EMA ({close_str})", ema_val_str)
+                else:
+                    signals['Trend'][f'EMA ({length})'] = ('Neutral', f"Price at EMA ({close_str})", ema_val_str)
         except KeyError:
-            signals['Trend']['Trend'][f'EMA ({length})'] = ('Neutral', 'Error: Column not found.', 'N/A')
+            signals['Trend'][f'EMA ({length})'] = ('Neutral', 'Error: Column not found.', 'N/A')
 
     # --- Volume Indicators ---
     
-    # CMF
+    # CMF (FIX: Added NaN check)
     cmf_col = safe_column_lookup(df, 'CMF_')
     if cmf_col:
         cmf_val = df[cmf_col].iloc[-1]
-        cmf_val_str = f"{cmf_val:.3f}"
-        if cmf_val > 0.20:
-            signals['Volume']['CMF (20)'] = ('Bullish', f"Strong Accumulation ({cmf_val_str})", cmf_val_str)
-        elif cmf_val < -0.20:
-            signals['Volume']['CMF (20)'] = ('Bearish', f"Strong Distribution ({cmf_val_str})", cmf_val_str)
+        
+        if math.isnan(cmf_val):
+             signals['Volume']['CMF (20)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Volume']['CMF (20)'] = ('Neutral', f"Equilibrium/Weak Trend ({cmf_val_str})", cmf_val_str)
+            cmf_val_str = f"{cmf_val:.3f}"
+            if cmf_val > 0.20:
+                signals['Volume']['CMF (20)'] = ('Bullish', f"Strong Accumulation ({cmf_val_str})", cmf_val_str)
+            elif cmf_val < -0.20:
+                signals['Volume']['CMF (20)'] = ('Bearish', f"Strong Distribution ({cmf_val_str})", cmf_val_str)
+            else:
+                signals['Volume']['CMF (20)'] = ('Neutral', f"Equilibrium/Weak Trend ({cmf_val_str})", cmf_val_str)
     else:
         signals['Volume']['CMF (20)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
-    # OBV (Assumes 'OBV' column name is stable)
+    # OBV (FIX: Added NaN check)
     try:
         obv_val = df['OBV'].iloc[-1]
         obv_prev = df['OBV'].iloc[-5] 
-        obv_val_str = f"{obv_val:,.0f}"
-        if obv_val > obv_prev:
-            signals['Volume']['OBV'] = ('Bullish', "Volume increasing (OBV rising)", obv_val_str)
-        elif obv_val < obv_prev:
-            signals['Volume']['OBV'] = ('Bearish', "Volume decreasing (OBV falling)", obv_val_str)
+        
+        if math.isnan(obv_val) or math.isnan(obv_prev):
+             signals['Volume']['OBV'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Volume']['OBV'] = ('Neutral', "Volume flat or range-bound", obv_val_str)
+            obv_val_str = f"{obv_val:,.0f}"
+            if obv_val > obv_prev:
+                signals['Volume']['OBV'] = ('Bullish', "Volume increasing (OBV rising)", obv_val_str)
+            elif obv_val < obv_prev:
+                signals['Volume']['OBV'] = ('Bearish', "Volume decreasing (OBV falling)", obv_val_str)
+            else:
+                signals['Volume']['OBV'] = ('Neutral', "Volume flat or range-bound", obv_val_str)
     except KeyError:
         signals['Volume']['OBV'] = ('Neutral', 'N/A (Error)', 'N/A')
+    except IndexError:
+        signals['Volume']['OBV'] = ('Neutral', 'N/A (Not enough bars)', 'N/A')
 
-    # VWAP
-    # Using the VWAP column provided by Kraken in the OHLC data
+    # VWAP (FIX: Implemented robust NaN check for the critical formatting error)
     try:
         vwap_val = df['VWAP'].iloc[-1]
-        vwap_val_str = f"${vwap_val:,.0f}"
-        if close > vwap_val:
-            signals['Volume']['VWAP'] = ('Bullish', f"Price above VWAP ({close_str})", vwap_val_str)
-        elif close < vwap_val:
-            signals['Volume']['VWAP'] = ('Bearish', f"Price below VWAP ({close_str})", vwap_val_str)
+        
+        if math.isnan(vwap_val):
+            vwap_val_str = "N/A"
+            signals['Volume']['VWAP'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Volume']['VWAP'] = ('Neutral', f"Price at VWAP ({close_str})", vwap_val_str)
+            vwap_val_str = f"${vwap_val:,.0f}"
+            if close > vwap_val:
+                signals['Volume']['VWAP'] = ('Bullish', f"Price above VWAP ({close_str})", vwap_val_str)
+            elif close < vwap_val:
+                signals['Volume']['VWAP'] = ('Bearish', f"Price below VWAP ({close_str})", vwap_val_str)
+            else:
+                signals['Volume']['VWAP'] = ('Neutral', f"Price at VWAP ({close_str})", vwap_val_str)
+                
     except KeyError:
         signals['Volume']['VWAP'] = ('Neutral', 'N/A (Error)', 'N/A')
 
 
     # --- Volatility Indicators ---
 
-    # Bollinger Bands
+    # Bollinger Bands (FIX: Added NaN check)
     upper_band_col = safe_column_lookup(df, 'BBU_')
     lower_band_col = safe_column_lookup(df, 'BBL_')
     
     if upper_band_col and lower_band_col:
         upper_band = df[upper_band_col].iloc[-1]
         lower_band = df[lower_band_col].iloc[-1]
-        if close > upper_band:
-            signals['Volatility']['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close_str})", close_str)
-        elif close < lower_band:
-            signals['Volatility']['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close_str})", close_str)
+        
+        if math.isnan(upper_band) or math.isnan(lower_band):
+             signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
         else:
-            signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close_str})", close_str)
+            if close > upper_band:
+                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bearish', f"Price above Upper Band ({close_str})", close_str)
+            elif close < lower_band:
+                signals['Volatility']['Bollinger Bands (20,2)'] = ('Bullish', f"Price below Lower Band ({close_str})", close_str)
+            else:
+                signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close_str})", close_str)
     else:
         signals['Volatility']['Bollinger Bands (20,2)'] = ('Neutral', 'N/A (Error)', 'N/A')
 
-    # ATR
+    # ATR (FIX: Added NaN check)
     atr_col = safe_column_lookup(df, 'ATR_')
     if atr_col:
         atr_val = df[atr_col].iloc[-1]
-        atr_val_str = f"${atr_val:,.2f}"
-        signals['Volatility']['ATR (14)'] = ('Neutral', f"Average bar range: {atr_val_str}", atr_val_str)
+        
+        if math.isnan(atr_val):
+             signals['Volatility']['ATR (14)'] = ('Neutral', 'N/A (Data Not Ready)', 'N/A')
+        else:
+            atr_val_str = f"${atr_val:,.2f}"
+            signals['Volatility']['ATR (14)'] = ('Neutral', f"Average bar range: {atr_val_str}", atr_val_str)
     else:
         signals['Volatility']['ATR (14)'] = ('Neutral', 'N/A (Error)', 'N/A')
         
@@ -411,7 +471,7 @@ def get_divergence_alerts(df):
     cmf_col = safe_column_lookup(df, 'CMF_')
     atr_col = safe_column_lookup(df, 'ATR_')
 
-    if mfi_col:
+    if mfi_col and not math.isnan(current[mfi_col]):
         mfi_current = current[mfi_col]
         mfi_previous = previous[mfi_col]
         # Bullish Reversal: Was oversold (<20) and is now rising (>30)
@@ -433,7 +493,7 @@ def get_divergence_alerts(df):
                 'Value': f"{mfi_current:.2f}"
             })
     
-    if cmf_col:
+    if cmf_col and not math.isnan(current[cmf_col]):
         cmf_current = current[cmf_col]
         cmf_previous = previous[cmf_col]
         # CMF Zero Crosses (Bullish/Bearish)
@@ -462,7 +522,7 @@ def get_divergence_alerts(df):
     recent_df = df.tail(5)
     
     # Check for required columns before proceeding
-    if atr_col and cmf_col and 'Volume' in current and 'High' in current and 'Low' in current:
+    if atr_col and cmf_col and 'Volume' in current and 'High' in current and 'Low' in current and not math.isnan(current[atr_col]):
         
         # Calculate key metrics
         avg_volume = recent_df['Volume'].mean()
@@ -476,7 +536,7 @@ def get_divergence_alerts(df):
         VOLUME_SPIKE_FACTOR = 1.5  # Current volume is 1.5x the 5-bar average
         RANGE_COMPRESSION_FACTOR = 0.5 # Current range is less than 50% of ATR
     
-        if current_volume > avg_volume * VOLUME_SPIKE_FACTOR and current_range < atr_val * RANGE_COMPRESSION_FACTOR:
+        if current_volume > avg_volume * VOLUME_SPIKE_FACTOR and current_range < atr_val * RANGE_COMPRESSION_FACTOR and not math.isnan(cmf_val):
             
             # High volume, low price movement (disparity detected)
             vol_str = f"{current_volume/1000:,.0f}K"
@@ -672,8 +732,8 @@ def run_all_checks():
 st.title("Bitcoin TA Signal Matrix & Feed Monitor")
 st.markdown("Live data pulled from **Kraken API**. Health monitored with **exponential backoff**.")
 
-# --- 0. Live Bitcoin Tracking ---
-st.header("0. Live Bitcoin Metrics (Kraken API)")
+# --- Live Bitcoin Tracking ---
+st.header("Live Bitcoin Metrics")
 btc_price, btc_volume_xbt, btc_change, current_utc_time = fetch_btc_data()
 
 if btc_price is not None:
@@ -715,10 +775,25 @@ else:
 
 st.markdown("---")
 
-# --- 0.5 TA Configuration Controls (Sidebar) ---
+# --- Configuration Controls (Sidebar) & Instructions ---
 with st.sidebar:
-    st.header("Configuration")
-    st.info("The configuration is currently in-memory and will reset when the Streamlit app is stopped and restarted.")
+    st.header("Instructions & Glossary")
+    st.markdown("""
+    This app provides a health monitor for critical data feeds and an automated technical analysis (TA) signal matrix for BTC/USD.
+    
+    **Instructions for Use:**
+    1.  **Configure Timeframe:** Select the desired chart interval and number of historical bars in the "TA Data Parameters" section below.
+    2.  **View Signals:** The **Automated TA Signal Matrix** and **Tactical Alerts** reflect the selected timeframe. Signals that say "N/A" either lack sufficient historical data or failed calculation (e.g., if you set the bar count too low).
+    3.  **Check Feeds:** Use the **Run All Health Checks Now** button to test the stability of the API sources.
+
+    ---
+    **Glossary of Indicators:**
+    * **RSI (Relative Strength Index):** Measures the speed and change of price movements. Signals Overbought (>70) or Oversold (<30).
+    * **MACD (Moving Average Convergence Divergence):** Measures the relationship between two moving averages. Signal based on Histogram crossing zero.
+    * **ADX (Average Directional Index):** Measures trend strength. High value (>25) indicates a strong trend (Bull or Bear, determined by +DI/-DI).
+    * **CMF (Chaikin Money Flow):** Measures the amount of Money Flow Volume over a specific period. Positive suggests accumulation (buying pressure).
+    * **VWAP (Volume-Weighted Average Price):** The average price weighted by trading volume. Price above/below VWAP is Bullish/Bearish.
+    """)
 
     st.subheader("TA Data Parameters")
     
@@ -732,7 +807,7 @@ with st.sidebar:
 
     # User control for number of bars (Count)
     selected_bar_count = st.slider(
-        "Number of Historical Bars",
+        "Number of Historical Bars (Min 52 for Ichimoku)",
         min_value=52, # Minimum needed for Ichimoku
         max_value=1000,
         value=300,
@@ -745,8 +820,8 @@ st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_wi
 
 st.markdown("---")
 
-# --- 3.5. Tactical Reversal Alerts ---
-st.header("3.5. Tactical Reversal & Disparity Alerts")
+# --- Tactical Reversal Alerts ---
+st.header("Tactical Reversal & Disparity Alerts")
 st.markdown("Immediate Long/Short signals based on MFI/CMF crosses and **Volume/Price Disparity** (VPD).")
 
 historical_df = fetch_historical_data(selected_interval_minutes, selected_bar_count)
@@ -791,8 +866,8 @@ else:
 st.markdown("---")
 
 
-# --- 3. Automated TA Signals (Tiled Matrix) ---
-st.header(f"3. Automated TA Signal Matrix ({selected_timeframe_str})")
+# --- Automated TA Signals (Tiled Matrix) ---
+st.header(f"Automated TA Signal Matrix ({selected_timeframe_str})")
 st.markdown("Consolidated signals grouped by indicator type for efficient market assessment.")
 
 ta_signals_grouped = get_indicator_signal(historical_df)
@@ -859,8 +934,8 @@ else:
     st.warning("Not enough historical data to calculate indicators (min 52 bars). Try increasing the bar count or check data fetch status.")
 
 
-# --- 1. Feed Status Overview (Monitoring) ---
-st.header("1. Critical Data Feed Health Check")
+# --- Feed Status Overview (Monitoring) ---
+st.header("Critical Data Feed Health Check")
 
 # Calculate metrics
 total_checks = len(st.session_state.api_configs)
@@ -904,8 +979,8 @@ st.dataframe(
 
 st.markdown("---")
 
-# --- 2. Response Time History ---
-st.header("2. Response Time History")
+# --- Response Time History ---
+st.header("Response Time History")
 st.markdown("Displays the response time trend for all successful checks over the last 50 attempts.")
 
 history_df = st.session_state.history[st.session_state.history['Response Time (ms)'] > 0]
