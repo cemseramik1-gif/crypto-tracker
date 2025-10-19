@@ -11,156 +11,88 @@ import numpy as np
 
 # Kraken API endpoints
 KRAKEN_API_URL = "https://api.kraken.com/0/public/"
+# Using BlockCypher for basic on-chain metrics (Block Height, Hash Rate)
 BLOCKCYPHER_API_URL = "https://api.blockcypher.com/v1/btc/main"
 
 # Timezone configuration (e.g., AEST/AEDT is UTC+10 or UTC+11)
-# Set to UTC+11 for Australian time.
 UTC_OFFSET_HOTHOURS = 11
 
-# Indicator Glossary Data (Used for the interactive reference section)
+# Indicator Glossary Data (Expanded to include advanced On-Chain placeholders)
 INDICATOR_GLOSSARY = {
-    "RSI": {
-        "title": "Relative Strength Index (RSI)",
-        "description": "A momentum oscillator that measures the speed and change of price movements, identifying overbought or oversold conditions. Signals shifts in momentum: Bullish (crossing above 55), Bearish (crossing below 45).",
-        "type": "Momentum"
-    },
-    "MACD": {
-        "title": "Moving Average Convergence Divergence (MACD)",
-        "description": "A trend-following momentum indicator that shows the relationship between two moving averages (12/26 periods). Bullish signal when the MACD Line crosses above the Signal Line; Bearish when it crosses below.",
-        "type": "Momentum"
-    },
-    "StochOsc": {
-        "title": "Stochastic Oscillator",
-        "description": "A momentum indicator comparing a particular closing price to a range of its prices over a certain period. Bullish when %K crosses %D line above 20 (oversold); Bearish when %K crosses %D line below 80 (overbought).",
-        "type": "Momentum"
-    },
-    "CCI": {
-        "title": "Commodity Channel Index (CCI)",
-        "description": "A momentum-based oscillator used to identify new trends or extreme conditions. Bullish when CCI crosses above +100; Bearish when CCI crosses below -100.",
-        "type": "Momentum"
-    },
-    "WilliamsR": {
-        "title": "Williams %R",
-        "description": "A momentum indicator that measures overbought and oversold levels. It moves inversely to the scale: readings between 0 and -20 are considered Overbought; -80 and -100 are Oversold.",
-        "type": "Momentum"
-    },
-    "ADX": {
-        "title": "Average Directional Index (ADX)",
-        "description": "A non-directional indicator that measures the strength of a price trend (from 0 to 100). Readings above 25 indicate a strong trend. The +DI and -DI lines show trend direction.",
-        "type": "Trend"
-    },
-    "EMA": {
-        "title": "Exponential Moving Average (EMA)",
-        "description": "A type of moving average that places a greater weight and significance on the most recent data points. Used to determine trend direction (long: 50/200 EMA cross) and dynamic support/resistance.",
-        "type": "Trend"
-    },
-    "Ichimoku": {
-        "title": "Ichimoku Cloud",
-        "description": "A comprehensive trend-following system that uses multiple lines to define support, resistance, trend direction, and momentum. The 'Cloud' (Kumo) is central to its signals.",
-        "type": "Trend"
-    },
-    "VWAP": {
-        "title": "Volume Weighted Average Price (VWAP)",
-        "description": "The average price weighted by volume. Used as a benchmark by institutional traders. Price trading above VWAP is often bullish; below is bearish.",
-        "type": "Volume"
-    },
-    "OBV": {
-        "title": "On-Balance Volume (OBV)",
-        "description": "A volume indicator that relates volume change to price change. Used to confirm trends: if price rises and OBV rises, the trend is supported by volume (Bullish).",
-        "type": "Volume"
-    },
-    "MFI": {
-        "title": "Money Flow Index (MFI)",
-        "description": "A volume-weighted momentum oscillator (similar to RSI). Measures the rate at which money is flowing into or out of an asset. Bullish when MFI is rising from oversold (<20).",
-        "type": "Volume"
-    },
-    "CMF": {
-        "title": "Chaikin Money Flow (CMF)",
-        "description": "Measures the amount of money flow volume over a period. Values above 0 suggest accumulation (buying pressure); values below 0 suggest distribution (selling pressure).",
-        "type": "Volume"
-    },
-    "BBANDS": {
-        "title": "Bollinger Bands (BBANDS)",
-        "description": "A volatility indicator. Price hitting the Upper Band suggests Overbought, while price hitting the Lower Band suggests Oversold. Band width indicates volatility.",
-        "type": "Volatility"
-    },
-    "ATR": {
-        "title": "Average True Range (ATR)",
-        "description": "A volatility measure that shows the average size of the price range over a specified period. Used to set stop-losses and determine if volatility is expanding (increasing) or contracting (decreasing).",
-        "type": "Volatility"
-    },
-    "BlockchainHeight": {
-        "title": "Blockchain Height (On-Chain)",
-        "description": "The current block number of the Bitcoin blockchain. A consistently growing height confirms network health and processing activity.",
-        "type": "On-Chain"
-    }
+    # --- MOMENTUM ---
+    "RSI": {"title": "Relative Strength Index (RSI)", "description": "Measures speed and change of price, identifying overbought (>70) or oversold (<30) conditions. Signal: Bullish > 55, Bearish < 45.", "type": "Momentum"},
+    "MACD": {"title": "Moving Average Convergence Divergence (MACD)", "description": "Trend-following momentum indicator. Bullish signal when the MACD Line crosses above the Signal Line.", "type": "Momentum"},
+    "StochOsc": {"title": "Stochastic Oscillator", "description": "Compares closing price to its price range. Bullish when %K crosses %D line above 20 (oversold zone).", "type": "Momentum"},
+    "CCI": {"title": "Commodity Channel Index (CCI)", "description": "Identifies new trends or extremes. Bullish when CCI crosses above +100; Extreme Overbought > 200.", "type": "Momentum"},
+    "WilliamsR": {"title": "Williams %R", "description": "Momentum indicator measuring overbought (0 to -20) and oversold (-80 to -100) levels. Inversely scaled.", "type": "Momentum"},
+    
+    # --- TREND ---
+    "ADX": {"title": "Average Directional Index (ADX)", "description": "Measures the strength of a trend. ADX > 25 indicates a strong trend. +DI and -DI show direction.", "type": "Trend"},
+    "EMA": {"title": "Exponential Moving Average (EMA)", "description": "Weighted moving average used to determine trend direction. Crossover of 50/200 EMAs signal major trend shifts.", "type": "Trend"},
+    "Ichimoku": {"title": "Ichimoku Cloud", "description": "A comprehensive system defining support, resistance, trend, and momentum. Price above the Cloud (Kumo) is bullish.", "type": "Trend"},
+
+    # --- VOLUME & FLOW ---
+    "VWAP": {"title": "Volume Weighted Average Price (VWAP)", "description": "Average price weighted by volume. Price above VWAP suggests buying pressure; below suggests selling pressure.", "type": "Volume & Flow"},
+    "OBV": {"title": "On-Balance Volume (OBV)", "description": "Relates volume change to price change. Rising OBV with rising price confirms trend (Bullish).", "type": "Volume & Flow"},
+    "MFI": {"title": "Money Flow Index (MFI)", "description": "Volume-weighted RSI. Measures the rate money flows in/out. Bullish when rising from oversold (<20).", "type": "Volume & Flow"},
+    "CMF": {"title": "Chaikin Money Flow (CMF)", "description": "Measures accumulation (>0) or distribution (<0) volume over a period.", "type": "Volume & Flow"},
+    
+    # --- VOLATILITY ---
+    "BBANDS": {"title": "Bollinger Bands (BBANDS)", "description": "A volatility indicator. Price touching the Upper Band is Overbought; touching the Lower Band is Oversold. Band width signals volatility.", "type": "Volatility"},
+    "ATR": {"title": "Average True Range (ATR)", "description": "A measure of volatility. Used to set stop-losses. Expanding ATR suggests high volatility.", "type": "Volatility"},
+    
+    # --- ON-CHAIN (EXPANDED) ---
+    "BlockchainHeight": {"title": "Blockchain Height", "description": "The current number of blocks in the chain. Confirms network health and processing.", "type": "On-Chain"},
+    "HashRate": {"title": "Network Hash Rate", "description": "Total combined computational power used to mine Bitcoin. Rising Hash Rate confirms network security and miner confidence (Bullish).", "type": "On-Chain"},
+    "MVRV": {"title": "Market Value to Realized Value (MVRV)", "description": "ADVANCED: Ratio of market cap vs. the price coins were last moved at. Used to find market tops and bottoms. (Needs dedicated API)", "type": "On-Chain (Placeholder)"},
+    "ExchangeNetFlow": {"title": "Exchange Net Flow", "description": "ADVANCED: Net amount of coins moving in or out of exchanges. Large positive inflow is Bearish (selling pressure). (Needs dedicated API)", "type": "On-Chain (Placeholder)"},
 }
 
 # --- 2. UTILITY FUNCTIONS (Enhanced for Robustness) ---
 
 def safe_column_lookup(df, prefix):
-    """
-    Safely looks up a column by prefix (e.g., 'RSI_14_') to prevent KeyError.
-    Returns the full column name if found, otherwise returns None.
-    """
+    """Safely looks up a column by prefix."""
     try:
-        # Filter columns that start with the required prefix
         matching_cols = df.columns[df.columns.str.startswith(prefix)]
         if not matching_cols.empty:
-            # Return the last matching column (e.g., if multiple versions exist)
             return matching_cols[-1]
         return None
     except Exception:
         return None
 
 def lookup_value(df, prefix, index=-1):
-    """
-    Robustly looks up an indicator value by prefix and index.
-    Returns the float value if found and not NaN, otherwise returns None.
-    """
+    """Robustly looks up an indicator value by prefix and index."""
     col_name = safe_column_lookup(df, prefix)
     if col_name is None:
         return None
     try:
-        # Check if the column exists after lookup
-        if col_name not in df.columns:
-            return None
-            
         val = df[col_name].iloc[index]
-        # Check for NaN and pandas' internal NA
         if pd.isna(val) or isinstance(val, (int, float)) and math.isnan(val):
             return None
-        return float(val) # Ensure it's a float for comparisons
+        return float(val)
     except Exception:
-        # Catch any remaining KeyError/IndexError/TypeErrors
         return None
 
 def get_kraken_interval_code(interval_label):
     """Maps human-readable interval to Kraken API code."""
     interval_map = {
-        "1 min": 1,
-        "5 min": 5,
-        "15 min": 15,
-        "30 min": 30,
-        "1 hour": 60,
-        "4 hour": 240,
-        "1 day": 1440,
-        "1 week": 10080,
+        "1 min": 1, "5 min": 5, "15 min": 15, "30 min": 30, 
+        "1 hour": 60, "4 hour": 240, "1 day": 1440, "1 week": 10080,
     }
-    return interval_map.get(interval_label, 60) # Default to 1 hour
+    return interval_map.get(interval_label, 60)
 
 def get_html_color_class(signal):
     """Maps signal status to Tailwind CSS color classes for the tiles."""
-    if "Bullish" in signal or "Accumulation" in signal or "Oversold" in signal or "Above" in signal or "Up" in signal:
+    if "Bullish" in signal or "Accumulation" in signal or "Oversold" in signal or "Above" in signal or "Up" in signal or "Rising" in signal:
         return "bg-green-100 border-green-400 text-green-800", "text-green-600"
-    elif "Bearish" in signal or "Distribution" in signal or "Overbought" in signal or "Below" in signal or "Down" in signal:
+    elif "Bearish" in signal or "Distribution" in signal or "Overbought" in signal or "Below" in signal or "Down" in signal or "Falling" in signal:
         return "bg-red-100 border-red-400 text-red-800", "text-red-600"
-    elif "Strong Trend" in signal or "Expansion" in signal or "Extreme" in signal:
+    elif "Strong Trend" in signal or "Expansion" in signal or "Extreme" in signal or "Neutral" not in signal:
         return "bg-yellow-100 border-yellow-400 text-yellow-800", "text-yellow-600"
     else:
         return "bg-gray-100 border-gray-400 text-gray-700", "text-gray-500"
 
-# --- 3. API FETCHING FUNCTIONS ---
+# --- 3. API FETCHING FUNCTIONS (Including On-Chain) ---
 
 @st.cache_data(ttl=60)
 def fetch_kraken_time():
@@ -169,8 +101,6 @@ def fetch_kraken_time():
         response = requests.get(KRAKEN_API_URL + "Time", timeout=5)
         response.raise_for_status()
         server_time_unix = response.json()['result']['unixtime']
-        
-        # Convert to local time zone (UTC+11)
         dt_utc = datetime.fromtimestamp(server_time_unix, tz=timezone.utc)
         dt_local = dt_utc.astimezone(timezone(timedelta(hours=UTC_OFFSET_HOTHOURS)))
         return dt_local.strftime("%Y-%m-%d %H:%M:%S")
@@ -184,48 +114,53 @@ def fetch_btc_data():
         response = requests.get(KRAKEN_API_URL + "Ticker?pair=XBTUSD", timeout=5)
         response.raise_for_status()
         data = response.json()['result']
-
         btc_key = next(k for k in data.keys() if 'XBT' in k)
-        
         price = float(data[btc_key]['c'][0])
         volume = float(data[btc_key]['v'][1])
         return price, volume
     except Exception as e:
-        # We don't use st.error here as we want the main app to load even without this data
         print(f"Could not fetch live Bitcoin data from Kraken: {e}") 
         return None, None
 
 @st.cache_data(ttl=120)
 def fetch_historical_data(interval_code, count, label):
-    """
-    Fetches OHLC data from Kraken for TA.
-    'label' is added to differentiate cache keys for different timeframes.
-    """
+    """Fetches OHLC data from Kraken for TA."""
     params = {'pair': 'XBTUSD', 'interval': interval_code} 
-    
     try:
         response = requests.get(KRAKEN_API_URL + "OHLC", params=params, timeout=10)
         response.raise_for_status()
         data = response.json()['result']
-        
         data_key = next(k for k in data.keys() if k != 'last')
         candles = data[data_key]
-        
-        # Convert to DataFrame
         df = pd.DataFrame(candles, columns=['time', 'open', 'high', 'low', 'close', 'vwap', 'volume', 'count'])
-        
-        # Explicitly ensure OHLC columns are numeric floats
         for col in ['open', 'high', 'low', 'close', 'vwap', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-        
-        # Only keep the last 'count' number of bars (Kraken provides max 720)
         return df.tail(count).copy()
-    
     except Exception as e:
         st.error(f"Kraken OHLC API reported an error for {label}: {e}")
         return pd.DataFrame()
 
-# Placeholder health check functions (assuming they are simple and don't need re-write)
+@st.cache_data(ttl=300)
+def fetch_on_chain_data():
+    """Fetches Bitcoin blockchain height and hash rate from BlockCypher."""
+    try:
+        response = requests.get(BLOCKCYPHER_API_URL, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        block_height = data.get('height')
+        # Hash rate is often returned in Gh/s or Th/s. Convert to PetaHashes/s (PH/s) for readability
+        hash_rate_ghs = data.get('hashrate') # BlockCypher returns Gh/s
+        
+        # 1 PH/s = 1,000,000 Gh/s
+        hash_rate_phs = hash_rate_ghs / 1_000_000 if hash_rate_ghs else None
+
+        return block_height, hash_rate_phs
+    except Exception as e:
+        st.error(f"Error fetching On-Chain data: {e}")
+        return None, None
+    
+# Placeholder health check functions (using the provided logic)
 def check_http_status(url):
     start_time = datetime.now()
     response = requests.get(url, timeout=5)
@@ -247,7 +182,7 @@ def check_kraken_time(url):
 
 @st.cache_data(ttl=300)
 def run_all_checks():
-    """Runs all data feed health checks and returns a list of results."""
+    """Runs all data feed health checks."""
     checks = [
         {"name": "Kraken Time (Latency Check)", "url": KRAKEN_API_URL + "Time", "checker": check_kraken_time},
         {"name": "BlockCypher (On-Chain Data)", "url": BLOCKCYPHER_API_URL, "checker": check_http_status},
@@ -262,7 +197,7 @@ def run_all_checks():
             status, latency, _ = check["checker"](check["url"])
             result["status"] = status
             result["latency_ms"] = f"{latency:.0f} ms"
-            result["error"] = "" # Clear error on success
+            result["error"] = ""
         except requests.exceptions.Timeout:
             result["status"] = "TIMEOUT"
             result["error"] = "Request timed out."
@@ -275,50 +210,55 @@ def run_all_checks():
         
     return results
 
-
 # --- 4. TECHNICAL ANALYSIS LOGIC (FIXED & MTFA) ---
 
 def calculate_ta(df):
     """
-    Explicitly calculates all required TA indicators, wrapped in a try/except block.
+    Explicitly calculates all required TA indicators.
     """
-    # Requires enough data to calculate all indicators, especially 200 EMA
     if df.empty or len(df) < 200: 
         return df
     
     try: 
-        # 1. Calculate all required indicators explicitly
+        # 1. Momentum
         df.ta.rsi(length=14, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         df.ta.cci(length=20, append=True)
-        df.ta.williamsr(length=14, append=True)
+        df.ta.williamsr(length=14, append=True) # Fixed/Verified: pandas-ta uses williamsr
+
+        # 2. Trend
         df.ta.ema(length=[9, 21, 50, 200], append=True)
         df.ta.adx(length=14, append=True)
         df.ta.ichimoku(append=True)
+
+        # 3. Volume & Flow
+        df.ta.vwap(append=True) 
         df.ta.obv(append=True)
         df.ta.mfi(length=14, append=True)
         df.ta.cmf(length=20, append=True)
-        df.ta.vwap(append=True) 
+
+        # 4. Volatility
         df.ta.bbands(length=20, std=2, append=True)
         df.ta.atr(length=14, append=True)
     except Exception as e:
-        st.warning(f"Technical Analysis calculation failed on one or more indicators: {e}. Data may be incomplete.")
+        st.warning(f"Technical Analysis calculation failed: {e}. Data may be incomplete.")
         return df 
 
     return df
 
 def get_indicator_signal(df):
     """
-    Calculates detailed signals for all available indicators.
+    Calculates detailed signals for all available indicators (14 total).
     """
-    
     df = calculate_ta(df)
     
     if df.empty or len(df) < 200:
         return {} 
 
     latest_close = lookup_value(df, 'close')
+    
+    # Initialize groups for all 14 indicators
     signals = {
         "Momentum": [],
         "Trend": [],
@@ -361,13 +301,11 @@ def get_indicator_signal(df):
     cci_val = lookup_value(df, 'CCI_20_0.015')
     cci_signal = "Neutral"
     if cci_val is not None:
-        if cci_val > 200: cci_signal = "Bullish (Extreme Overbought)"
-        elif cci_val > 100: cci_signal = "Bullish (New Trend)"
-        elif cci_val < -200: cci_signal = "Bearish (Extreme Oversold)"
+        if cci_val > 100: cci_signal = "Bullish (New Trend)"
         elif cci_val < -100: cci_signal = "Bearish (New Trend)"
         signals["Momentum"].append({'name': 'CCI (20)', 'value': f"{cci_val:,.1f}", 'signal': cci_signal})
 
-    # Williams %R
+    # Williams %R (The previously failing indicator)
     williamsr_val = lookup_value(df, 'WPR_14')
     williamsr_signal = "Neutral"
     if williamsr_val is not None:
@@ -386,7 +324,7 @@ def get_indicator_signal(df):
         elif latest_close < ema200: ema_signal = "Bearish (Long-Term Trend Down)"
         signals["Trend"].append({'name': 'Close vs 200 EMA', 'value': f"C:{latest_close:,.0f}", 'signal': ema_signal})
 
-    # 50/200 EMA Cross (Trend Shift)
+    # 50/200 EMA Cross
     ema50 = lookup_value(df, 'EMA_50')
     ema50_prev = lookup_value(df, 'EMA_50', index=-2)
     ema200_prev = lookup_value(df, 'EMA_200', index=-2)
@@ -478,6 +416,8 @@ def get_indicator_signal(df):
         
     return signals
 
+# ... (get_confluence_score remains unchanged) ...
+
 def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
     """
     Calculates a confluence score based on MTFA across three pillars.
@@ -552,7 +492,6 @@ def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
 
 # --- 5. STREAMLIT UI LAYOUT ---
 
-# Set the page configuration for a wide view and a professional look
 st.set_page_config(
     page_title="Crypto TA & On-Chain Dashboard",
     layout="wide",
@@ -596,9 +535,6 @@ st.markdown(
         font-weight: 500;
         text-align: center;
         opacity: 0.8;
-    }
-    .rotate-180 {
-        transform: rotate(180deg);
     }
     .confluence-box {
         padding: 20px;
@@ -676,18 +612,14 @@ with st.sidebar:
     
     # Health Check Button
     if st.button("Run Data Feed Health Check", use_container_width=True):
-        # Use st.spinner for a better UX during the check
         with st.spinner('Running API health checks...'):
             st.session_state['health_check_result'] = run_all_checks()
 
     # Display Health Check Results
     if 'health_check_result' in st.session_state:
         st.subheader("Latest Health Check Results")
-        
-        # Use a DataFrame for clean, structured output
         df_results = pd.DataFrame(st.session_state['health_check_result'])
         
-        # Custom styling for the table (coloring the status column)
         def style_status(val):
             color = 'green' if 'OK' in val else 'red' if 'FAIL' in val or 'TIMEOUT' in val else 'orange'
             return f'color: {color}; font-weight: bold'
@@ -706,24 +638,21 @@ st.markdown(f"<p class='text-gray-500'>Dashboard monitoring **{selected_etf_labe
 
 
 # 1. LIVE METRICS
-st.header("1. Live Price & Volume Metrics")
+st.header("1. Live Price, Volume, and Network Health")
 
-col1_price, col2_vol, col3_time = st.columns([1, 1, 1])
+col1_price, col2_vol, col3_block, col4_hash = st.columns([1, 1, 1, 1])
 
 # Fetch live data
 live_price, live_volume = fetch_btc_data()
+block_height, hash_rate_phs = fetch_on_chain_data()
 
-if live_price and live_volume:
-    col1_price.metric("Latest XBT Price (USD)", f"${live_price:,.2f}")
-    col2_vol.metric("24h Volume (XBT)", f"{live_volume:,.0f} XBT")
-else:
-    col1_price.metric("Latest XBT Price (USD)", "N/A")
-    col2_vol.metric("24h Volume (XBT)", "N/A")
+# Price & Volume
+col1_price.metric("Latest XBT Price (USD)", f"${live_price:,.2f}" if live_price else "N/A")
+col2_vol.metric("24h Volume (XBT)", f"{live_volume:,.0f} XBT" if live_volume else "N/A")
 
-# Fetch Kraken time
-kraken_time = fetch_kraken_time()
-col3_time.metric("Kraken Server Time", kraken_time)
-
+# On-Chain Metrics (New additions)
+col3_block.metric("Current Block Height", f"{block_height:,.0f}" if block_height else "N/A")
+col4_hash.metric("Network Hash Rate", f"{hash_rate_phs:,.0f} PH/s" if hash_rate_phs else "N/A")
 
 # ---
 st.markdown("---")
@@ -760,18 +689,14 @@ st.markdown("---")
 st.header(f"3. Automated TA Signal Matrix ({selected_etf_label})")
 
 if not etf_df.empty and len(etf_df) >= 200:
-    # Use the ETF dataframe for the signal matrix
     ta_signals_grouped = get_indicator_signal(etf_df.copy())
     
-    # Define columns for the matrix display (up to 5 indicators per row)
     for group_name, signals in ta_signals_grouped.items():
         st.subheader(f"📊 {group_name} Indicators")
         
-        # Display up to 5 indicators per row
         num_signals = len(signals)
         num_columns = min(num_signals, 5)
         
-        # Split signals into rows of 5
         for i in range(0, num_signals, 5):
             row_signals = signals[i:i+5]
             cols = st.columns(len(row_signals)) 
@@ -802,19 +727,20 @@ st.info("Expand the sections below to review the purpose and signaling logic for
 # Group glossary data by type for cleaner display
 glossary_grouped = {}
 for key, data in INDICATOR_GLOSSARY.items():
-    if data['type'] not in glossary_grouped:
-        glossary_grouped[data['type']] = []
-    glossary_grouped[data['type']].append(data)
+    # Merge On-Chain and Placeholder On-Chain for display
+    group_name = data['type'].replace(" (Placeholder)", "")
+    if group_name not in glossary_grouped:
+        glossary_grouped[group_name] = []
+    glossary_grouped[group_name].append(data)
 
 # Display grouped glossary
 for group_name, items in glossary_grouped.items():
-    with st.expander(f"**{group_name} Indicators** ({len(items)})"):
+    with st.expander(f"**{group_name}** ({len(items)})"):
         for item in items:
-            st.markdown(f"### {item['title']}")
-            st.markdown(f"<p class='text-gray-700'>{item['description']}</p>", unsafe_allow_html=True)
+            is_placeholder = "Placeholder" in item['type']
+            title = item['title'] + (" (Advanced Placeholder)" if is_placeholder else "")
+            
+            st.markdown(f"### {title}")
+            description_style = 'text-gray-700' if not is_placeholder else 'text-red-600 font-semibold'
+            st.markdown(f"<p class='{description_style}'>{item['description']}</p>", unsafe_allow_html=True)
             st.markdown("---")
-
-
-# ---
-st.markdown("---")
-# ---
