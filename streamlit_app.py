@@ -151,11 +151,11 @@ def get_kraken_interval_code(interval_label):
 
 def get_html_color_class(signal):
     """Maps signal status to Tailwind CSS color classes for the tiles."""
-    if "Bullish" in signal or "Accumulation" in signal or "Strong Long" in signal or "Oversold" in signal:
+    if "Bullish" in signal or "Accumulation" in signal or "Oversold" in signal or "Above" in signal or "Up" in signal:
         return "bg-green-100 border-green-400 text-green-800", "text-green-600"
-    elif "Bearish" in signal or "Distribution" in signal or "Strong Short" in signal or "Overbought" in signal:
+    elif "Bearish" in signal or "Distribution" in signal or "Overbought" in signal or "Below" in signal or "Down" in signal:
         return "bg-red-100 border-red-400 text-red-800", "text-red-600"
-    elif "Strong Trend" in signal or "Expansion" in signal:
+    elif "Strong Trend" in signal or "Expansion" in signal or "Extreme" in signal:
         return "bg-yellow-100 border-yellow-400 text-yellow-800", "text-yellow-600"
     else:
         return "bg-gray-100 border-gray-400 text-gray-700", "text-gray-500"
@@ -280,11 +280,10 @@ def run_all_checks():
 
 def calculate_ta(df):
     """
-    CRITICAL FIX: Explicitly calculates all required TA indicators.
-    Wrapped in a try/except block to prevent crashes from pandas-ta internal errors.
-    Modifies the DataFrame in-place and returns it.
+    Explicitly calculates all required TA indicators, wrapped in a try/except block.
     """
-    if df.empty or len(df) < 200:
+    # Requires enough data to calculate all indicators, especially 200 EMA
+    if df.empty or len(df) < 200: 
         return df
     
     try: 
@@ -300,19 +299,19 @@ def calculate_ta(df):
         df.ta.obv(append=True)
         df.ta.mfi(length=14, append=True)
         df.ta.cmf(length=20, append=True)
-        # VWAP is already calculated in fetch_historical_data from Kraken, but calculating again is safe:
         df.ta.vwap(append=True) 
         df.ta.bbands(length=20, std=2, append=True)
         df.ta.atr(length=14, append=True)
     except Exception as e:
-        # Catch any pandas_ta internal error and show a warning instead of crashing the app
         st.warning(f"Technical Analysis calculation failed on one or more indicators: {e}. Data may be incomplete.")
-        return df # Return the potentially partially calculated DF
+        return df 
 
     return df
 
 def get_indicator_signal(df):
-    """Calculates signals and determines Bullish/Bearish/Neutral signals."""
+    """
+    Calculates detailed signals for all available indicators.
+    """
     
     df = calculate_ta(df)
     
@@ -320,66 +319,163 @@ def get_indicator_signal(df):
         return {} 
 
     latest_close = lookup_value(df, 'close')
-    signals = {}
+    signals = {
+        "Momentum": [],
+        "Trend": [],
+        "Volume & Flow": [],
+        "Volatility": []
+    }
 
-    # --- MOMENTUM INDICATORS (Simplified for clarity) ---
+    # --- MOMENTUM INDICATORS ---
+    
+    # RSI
     rsi_val = lookup_value(df, 'RSI_14')
     rsi_signal = "Neutral"
     if rsi_val is not None:
         if rsi_val > 70: rsi_signal = "Bearish (Overbought)"
         elif rsi_val < 30: rsi_signal = "Bullish (Oversold)"
+        elif rsi_val > 55: rsi_signal = "Bullish (Rising)"
+        elif rsi_val < 45: rsi_signal = "Bearish (Falling)"
+        signals["Momentum"].append({'name': 'RSI (14)', 'value': f"{rsi_val:,.1f}", 'signal': rsi_signal})
     
-    macd_line = lookup_value(df, 'MACD_12_26_9')
+    # MACD Histogram
     macd_hist = lookup_value(df, 'MACDH_12_26_9')
     macd_signal = "Neutral"
     if macd_hist is not None:
         if macd_hist > 0: macd_signal = "Bullish (Momentum Up)"
         elif macd_hist < 0: macd_signal = "Bearish (Momentum Down)"
+        signals["Momentum"].append({'name': 'MACD Histogram', 'value': f"H:{macd_hist:,.2f}", 'signal': macd_signal})
         
+    # Stochastic Oscillator
+    stoch_k = lookup_value(df, 'STOCHk_14_3_3')
+    stoch_d = lookup_value(df, 'STOCHd_14_3_3')
+    stoch_signal = "Neutral"
+    if stoch_k is not None and stoch_d is not None:
+        if stoch_k > stoch_d and stoch_d < 20: stoch_signal = "Bullish (Oversold Buy)"
+        elif stoch_k < stoch_d and stoch_d > 80: stoch_signal = "Bearish (Overbought Sell)"
+        elif stoch_k > stoch_d: stoch_signal = "Bullish (K Crosses D)"
+        elif stoch_k < stoch_d: stoch_signal = "Bearish (D Crosses K)"
+        signals["Momentum"].append({'name': 'Stoch K/D', 'value': f"K:{stoch_k:,.1f}", 'signal': stoch_signal})
+
+    # CCI
+    cci_val = lookup_value(df, 'CCI_20_0.015')
+    cci_signal = "Neutral"
+    if cci_val is not None:
+        if cci_val > 200: cci_signal = "Bullish (Extreme Overbought)"
+        elif cci_val > 100: cci_signal = "Bullish (New Trend)"
+        elif cci_val < -200: cci_signal = "Bearish (Extreme Oversold)"
+        elif cci_val < -100: cci_signal = "Bearish (New Trend)"
+        signals["Momentum"].append({'name': 'CCI (20)', 'value': f"{cci_val:,.1f}", 'signal': cci_signal})
+
+    # Williams %R
+    williamsr_val = lookup_value(df, 'WPR_14')
+    williamsr_signal = "Neutral"
+    if williamsr_val is not None:
+        if williamsr_val > -20: williamsr_signal = "Bearish (Overbought)"
+        elif williamsr_val < -80: williamsr_signal = "Bullish (Oversold)"
+        signals["Momentum"].append({'name': 'Williams %R', 'value': f"{williamsr_val:,.1f}", 'signal': williamsr_signal})
+
+
     # --- TREND INDICATORS ---
+    
+    # 200 EMA Check
     ema200 = lookup_value(df, 'EMA_200')
     ema_signal = "Neutral"
     if ema200 is not None and latest_close is not None:
         if latest_close > ema200: ema_signal = "Bullish (Long-Term Trend Up)"
         elif latest_close < ema200: ema_signal = "Bearish (Long-Term Trend Down)"
+        signals["Trend"].append({'name': 'Close vs 200 EMA', 'value': f"C:{latest_close:,.0f}", 'signal': ema_signal})
 
-    # --- VOLUME/FLOW INDICATORS ---
+    # 50/200 EMA Cross (Trend Shift)
+    ema50 = lookup_value(df, 'EMA_50')
+    ema50_prev = lookup_value(df, 'EMA_50', index=-2)
+    ema200_prev = lookup_value(df, 'EMA_200', index=-2)
+    cross_signal = "Neutral"
+    if ema50 is not None and ema200 is not None and ema50_prev is not None and ema200_prev is not None:
+        if ema50 > ema200 and ema50_prev < ema200_prev:
+            cross_signal = "Bullish (Golden Cross/Shift)"
+        elif ema50 < ema200 and ema50_prev > ema200_prev:
+            cross_signal = "Bearish (Death Cross/Shift)"
+        signals["Trend"].append({'name': '50/200 EMA Cross', 'value': f"50/200 Gap:{(ema50-ema200):,.0f}", 'signal': cross_signal})
+
+    # ADX/DI
+    adx_val = lookup_value(df, 'ADX_14')
+    adx_di_plus = lookup_value(df, 'DMP_14')
+    adx_di_minus = lookup_value(df, 'DMN_14')
+    adx_signal = "Neutral Trend Strength"
+    if adx_val is not None and adx_di_plus is not None and adx_di_minus is not None:
+        if adx_val > 25:
+            adx_signal = "Strong Trend Detected"
+            if adx_di_plus > adx_di_minus: adx_signal += " (Bullish Direction)"
+            else: adx_signal += " (Bearish Direction)"
+        signals["Trend"].append({'name': 'ADX (14)', 'value': f"ADX:{adx_val:,.1f}", 'signal': adx_signal})
+
+    # Ichimoku Cloud (Kumo)
+    ichimoku_span_b = lookup_value(df, 'ICSB_26_52_9')
+    ichimoku_signal = "Neutral"
+    if ichimoku_span_b is not None and latest_close is not None:
+        if latest_close > ichimoku_span_b: ichimoku_signal = "Bullish (Above Cloud)"
+        elif latest_close < ichimoku_span_b: ichimoku_signal = "Bearish (Below Cloud)"
+        signals["Trend"].append({'name': 'Ichimoku Cloud', 'value': f"Close vs Span B", 'signal': ichimoku_signal})
+
+
+    # --- VOLUME & FLOW INDICATORS ---
+
+    # VWAP
     vwap_val = lookup_value(df, 'VWAP')
     vwap_signal = "Neutral"
     if vwap_val is not None and latest_close is not None:
         if latest_close > vwap_val: vwap_signal = "Bullish (Above VWAP)"
         elif latest_close < vwap_val: vwap_signal = "Bearish (Below VWAP)"
-        
+        signals["Volume & Flow"].append({'name': 'VWAP', 'value': f"${vwap_val:,.0f}", 'signal': vwap_signal})
+
+    # CMF
+    cmf_val = lookup_value(df, 'CMF_20')
+    cmf_signal = "Neutral"
+    if cmf_val is not None:
+        if cmf_val > 0.05: cmf_signal = "Bullish (Accumulation)"
+        elif cmf_val < -0.05: cmf_signal = "Bearish (Distribution)"
+        signals["Volume & Flow"].append({'name': 'Chaikin Money Flow', 'value': f"CMF:{cmf_val:,.2f}", 'signal': cmf_signal})
+
+    # MFI
+    mfi_val = lookup_value(df, 'MFI_14')
+    mfi_signal = "Neutral"
+    if mfi_val is not None:
+        if mfi_val > 80: mfi_signal = "Bearish (Extreme Overbought)"
+        elif mfi_val < 20: mfi_signal = "Bullish (Extreme Oversold)"
+        signals["Volume & Flow"].append({'name': 'Money Flow Index (MFI)', 'value': f"{mfi_val:,.1f}", 'signal': mfi_signal})
+
+    # OBV
+    obv_current = lookup_value(df, 'OBV', index=-1)
+    obv_prev = lookup_value(df, 'OBV', index=-2)
+    obv_signal = "Neutral"
+    if obv_current is not None and obv_prev is not None:
+        if obv_current > obv_prev: obv_signal = "Bullish (Volume Flowing In)"
+        elif obv_current < obv_prev: obv_signal = "Bearish (Volume Flowing Out)"
+        signals["Volume & Flow"].append({'name': 'On-Balance Volume', 'value': f"Change:{(obv_current-obv_prev):,.0f}", 'signal': obv_signal})
+
+
     # --- VOLATILITY INDICATORS ---
+
+    # Bollinger Bands
     upper_band = lookup_value(df, 'BBU_20_2')
     lower_band = lookup_value(df, 'BBL_20_2')
     bb_signal = "Neutral"
     if upper_band is not None and lower_band is not None and latest_close is not None:
-        if latest_close > upper_band: bb_signal = "Bearish (Overbought/Upper Band Test)"
-        elif latest_close < lower_band: bb_signal = "Bullish (Oversold/Lower Band Test)"
+        if latest_close > upper_band: bb_signal = "Bearish (Upper Band Test)"
+        elif latest_close < lower_band: bb_signal = "Bullish (Lower Band Test)"
+        signals["Volatility"].append({'name': 'Bollinger Bands', 'value': "U/L Band Test", 'signal': bb_signal})
+
+    # ATR
+    atr_val = lookup_value(df, 'ATR_14')
+    atr_signal = "Neutral"
+    if atr_val is not None:
+        # Simple check for expanding vs contracting volatility based on last 5 bars
+        atr_avg_5 = df[safe_column_lookup(df, 'ATR_14')].iloc[-6:-1].mean()
+        if atr_val > atr_avg_5 * 1.1: atr_signal = "Expansion (High Volatility)"
+        elif atr_val < atr_avg_5 * 0.9: atr_signal = "Contraction (Low Volatility)"
+        signals["Volatility"].append({'name': 'ATR (14)', 'value': f"${atr_val:,.2f}", 'signal': atr_signal})
         
-    # Format Values for Display (only the key ones)
-    rsi_val_str = f"{rsi_val:,.1f}" if rsi_val is not None else "N/A"
-    macd_val_str = f"H:{macd_hist:,.2f}" if macd_hist is not None else "N/A"
-    vwap_val_str = f"${vwap_val:,.0f}" if vwap_val is not None else "N/A"
-    
-    # Assemble final signals dictionary
-    signals = {
-        "Momentum": [
-            {'name': 'RSI (14)', 'value': rsi_val_str, 'signal': rsi_signal},
-            {'name': 'MACD Histogram', 'value': macd_val_str, 'signal': macd_signal},
-        ],
-        "Trend": [
-            {'name': '200 EMA Check', 'value': f"Last Close: {latest_close:,.0f}" if latest_close is not None else "N/A", 'signal': ema_signal},
-        ],
-        "Volume & Flow": [
-            {'name': 'VWAP', 'value': vwap_val_str, 'signal': vwap_signal},
-        ],
-        "Volatility": [
-            {'name': 'Bollinger Bands', 'value': "U/L Band Test", 'signal': bb_signal},
-        ]
-    }
-    
     return signals
 
 def get_confluence_score(htf_df, etf_df, htf_label, etf_label):
@@ -667,21 +763,30 @@ if not etf_df.empty and len(etf_df) >= 200:
     # Use the ETF dataframe for the signal matrix
     ta_signals_grouped = get_indicator_signal(etf_df.copy())
     
+    # Define columns for the matrix display (up to 5 indicators per row)
     for group_name, signals in ta_signals_grouped.items():
         st.subheader(f"📊 {group_name} Indicators")
-        cols = st.columns(5) 
         
-        for i, item in enumerate(signals):
-            tile_class, value_class = get_html_color_class(item['signal'])
+        # Display up to 5 indicators per row
+        num_signals = len(signals)
+        num_columns = min(num_signals, 5)
+        
+        # Split signals into rows of 5
+        for i in range(0, num_signals, 5):
+            row_signals = signals[i:i+5]
+            cols = st.columns(len(row_signals)) 
             
-            # Render the tile
-            cols[i].markdown(f"""
-                <div class='ta-tile {tile_class}'>
-                    <p class='tile-name'>{item['name']}</p>
-                    <p class='tile-value {value_class}'>{item['value']}</p>
-                    <p class='tile-signal'>{item['signal']}</p>
-                </div>
-            """, unsafe_allow_html=True)
+            for j, item in enumerate(row_signals):
+                tile_class, value_class = get_html_color_class(item['signal'])
+                
+                # Render the tile
+                cols[j].markdown(f"""
+                    <div class='ta-tile {tile_class}'>
+                        <p class='tile-name'>{item['name']}</p>
+                        <p class='tile-value {value_class}'>{item['value']}</p>
+                        <p class='tile-signal'>{item['signal']}</p>
+                    </div>
+                """, unsafe_allow_html=True)
 else:
     st.warning(f"Not enough historical data available for the Entry Time Frame ({selected_etf_label}) or bar count ({bar_count}). Need at least 200 bars for robust TA.")
 
@@ -690,13 +795,25 @@ else:
 st.markdown("---")
 # ---
 
-# 4. TECHNICAL INDICATOR GLOSSARY (NEW SECTION)
+# 4. TECHNICAL INDICATOR GLOSSARY 
 st.header("4. Technical Indicator Glossary")
 st.info("Expand the sections below to review the purpose and signaling logic for each indicator.")
 
+# Group glossary data by type for cleaner display
+glossary_grouped = {}
 for key, data in INDICATOR_GLOSSARY.items():
-    with st.expander(f"**{data['title']}** ({data['type']})"):
-        st.markdown(f"<p class='text-gray-700'>{data['description']}</p>", unsafe_allow_html=True)
+    if data['type'] not in glossary_grouped:
+        glossary_grouped[data['type']] = []
+    glossary_grouped[data['type']].append(data)
+
+# Display grouped glossary
+for group_name, items in glossary_grouped.items():
+    with st.expander(f"**{group_name} Indicators** ({len(items)})"):
+        for item in items:
+            st.markdown(f"### {item['title']}")
+            st.markdown(f"<p class='text-gray-700'>{item['description']}</p>", unsafe_allow_html=True)
+            st.markdown("---")
+
 
 # ---
 st.markdown("---")
