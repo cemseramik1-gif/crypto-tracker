@@ -4,7 +4,6 @@ numpy
 requests
 plotly
 pandas-ta
-yfinance
 python-dotenv
 scikit-learn
 textblob
