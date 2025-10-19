@@ -106,38 +106,29 @@ def fetch_historical_data(interval_minutes, count=300):
         st.error(f"Could not fetch historical data from Kraken: {e}")
         return None
 
-# --- NEW: Technical Analysis (TA) Signal Logic ---
+# --- Technical Analysis (TA) Signal Logic ---
 
 def get_indicator_signal(df):
     """Calculates all specified indicators and determines a bullish/bearish/neutral signal."""
     
-    # Check if the DataFrame has enough data for a 14-period calculation
-    # MACD needs 37 bars, Ichimoku needs 52 bars. We use 52 as the minimum safe threshold.
+    # Needs at least 52 bars for Ichimoku to be calculated properly.
     if df is None or df.empty or len(df) < 52: 
         return {}
     
     # --- 1. Calculate ALL indicators using pandas_ta ---
-    
-    # Momentum Indicators
+    # These calls populate the DataFrame with new columns like 'RSI_14', 'MACDh_12_26_9', etc.
     df.ta.rsi(append=True)
     df.ta.macd(append=True)
     df.ta.stoch(append=True) 
     df.ta.cci(append=True) 
     df.ta.willr(append=True) 
     df.ta.adx(append=True) 
-    
-    # Volatility Indicators
     df.ta.bbands(append=True) 
-    
-    # Volume / Flow Indicators
     df.ta.obv(append=True)
     df.ta.mfi(append=True)
-    
-    # Trend Indicators
     df.ta.ichimoku(append=True)
 
     # --- 2. Define Signal Logic (Based on standard rules) ---
-    
     signals = {}
     close = df['Close'].iloc[-1]
     
@@ -160,7 +151,7 @@ def get_indicator_signal(df):
         signals['MACD (12,26,9)'] = ('Neutral', f"Histogram ≈ 0")
         
     # --- Bollinger Bands Signal (Volatility) ---
-    # FIX: Dynamically search for the correct BBU/BBL column name
+    # Dynamic lookup to handle different pandas_ta versions (e.g., BBU_20_2 vs BBU_20_2.0)
     try:
         upper_band_col = next(col for col in df.columns if col.startswith('BBU_'))
         lower_band_col = next(col for col in df.columns if col.startswith('BBL_'))
@@ -176,40 +167,116 @@ def get_indicator_signal(df):
             signals['Bollinger Bands (20,2)'] = ('Neutral', f"Price inside Bands ({close:.2f})")
             
     except StopIteration:
-        signals['Bollinger Bands (20,2)'] = ('Neutral', 'Error: Column not found. Check pandas_ta.')
-    except Exception as e:
-        signals['Bollinger Bands (20,2)'] = ('Neutral', f'Error: {str(e)}')
-
-    # --- NEW: Stochastic Oscillator Signal (Momentum) ---
-    # Signal: %K > 80 is Bearish (Overbought), %K < 20 is Bullish (Oversold).
+        signals['Bollinger Bands (20,2)'] = ('Neutral', 'Error: BB Column not found.')
+        
+    # --- Stochastic Oscillator Signal (Momentum) ---
     try:
         k = df['STOCHk_14_3_3'].iloc[-1]
-        d = df['STOCHd_14_3_3'].iloc[-1] # D line for reference
+        d = df['STOCHd_14_3_3'].iloc[-1]
         
         if k > 80:
             signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"Overbought (%K={k:.2f})")
         elif k < 20:
             signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"Oversold (%K={k:.2f})")
         else:
-            # We can use the crossover logic for a stronger signal when neutral
-            if d > 80 and k < d: # In overbought territory and K crosses below D
+            if d > 80 and k < d: # In overbought and K crosses below D
                  signals['Stochastic Oscillator (14,3,3)'] = ('Bearish', f"K crossing D, top range")
-            elif d < 20 and k > d: # In oversold territory and K crosses above D
+            elif d < 20 and k > d: # In oversold and K crosses above D
                  signals['Stochastic Oscillator (14,3,3)'] = ('Bullish', f"K crossing D, bottom range")
             else:
                  signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', f"Mid-Range (%K={k:.2f})")
-
     except KeyError:
         signals['Stochastic Oscillator (14,3,3)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- Commodity Channel Index (CCI) Signal ---
+    try:
+        cci_val = df[next(col for col in df.columns if col.startswith('CCI_'))].iloc[-1]
+        if cci_val > 100:
+            signals['Commodity Channel Index (CCI)'] = ('Bearish', f"Extreme Overbought ({cci_val:.2f})")
+        elif cci_val < -100:
+            signals['Commodity Channel Index (CCI)'] = ('Bullish', f"Extreme Oversold ({cci_val:.2f})")
+        else:
+            signals['Commodity Channel Index (CCI)'] = ('Neutral', f"Between -100 and +100 ({cci_val:.2f})")
+    except (KeyError, StopIteration):
+        signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- Money Flow Index (MFI) Signal ---
+    try:
+        mfi_val = df[next(col for col in df.columns if col.startswith('MFI_'))].iloc[-1]
+        if mfi_val > 80:
+            signals['Money Flow Index (MFI)'] = ('Bearish', f"Overbought ({mfi_val:.2f})")
+        elif mfi_val < 20:
+            signals['Money Flow Index (MFI)'] = ('Bullish', f"Oversold ({mfi_val:.2f})")
+        else:
+            signals['Money Flow Index (MFI)'] = ('Neutral', f"Mid-Range ({mfi_val:.2f})")
+    except (KeyError, StopIteration):
+        signals['Money Flow Index (MFI)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- Williams %R Signal ---
+    try:
+        willr_val = df[next(col for col in df.columns if col.startswith('WMR_') or col.startswith('WILLR_'))].iloc[-1]
+        if willr_val > -20: # -20 is the overbought threshold
+            signals['Williams %R (14)'] = ('Bearish', f"Overbought ({willr_val:.2f})")
+        elif willr_val < -80: # -80 is the oversold threshold
+            signals['Williams %R (14)'] = ('Bullish', f"Oversold ({willr_val:.2f})")
+        else:
+            signals['Williams %R (14)'] = ('Neutral', f"Mid-Range ({willr_val:.2f})")
+    except (KeyError, StopIteration):
+        signals['Williams %R (14)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- Average Directional Index (ADX) Signal (Trend Strength & Direction) ---
+    try:
+        adx = df[next(col for col in df.columns if col.startswith('ADX_'))].iloc[-1]
+        di_plus = df[next(col for col in df.columns if col.startswith('DMP_'))].iloc[-1]
+        di_minus = df[next(col for col in df.columns if col.startswith('DMM_'))].iloc[-1]
         
-    # --- Placeholders for remaining requested indicators ---
-    signals['On-Balance Volume (OBV)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Money Flow Index (MFI)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Williams %R (14)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Commodity Channel Index (CCI)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Average Directional Index (ADX)'] = ('Neutral', 'Logic Not Yet Defined')
-    signals['Ichimoku Cloud (Complex)'] = ('Neutral', 'Logic Not Yet Defined') 
-    
+        strength = "Weak"
+        if adx > 25: strength = "Strong"
+        elif adx > 20: strength = "Developing"
+            
+        if di_plus > di_minus:
+            signals['Average Directional Index (ADX)'] = ('Bullish', f"{strength} Bull Trend (+DI > -DI)")
+        elif di_minus > di_plus:
+            signals['Average Directional Index (ADX)'] = ('Bearish', f"{strength} Bear Trend (-DI > +DI)")
+        else:
+            signals['Average Directional Index (ADX)'] = ('Neutral', f"No Clear Trend Direction ({strength})")
+
+    except (KeyError, StopIteration):
+        signals['Average Directional Index (ADX)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- On-Balance Volume (OBV) Signal (Simple trend check) ---
+    try:
+        obv_val = df['OBV'].iloc[-1]
+        obv_prev = df['OBV'].iloc[-5] # Compare to 5 periods ago
+        
+        if obv_val > obv_prev:
+            signals['On-Balance Volume (OBV)'] = ('Bullish', "Volume increasing (OBV rising)")
+        elif obv_val < obv_prev:
+            signals['On-Balance Volume (OBV)'] = ('Bearish', "Volume decreasing (OBV falling)")
+        else:
+            signals['On-Balance Volume (OBV)'] = ('Neutral', "Volume flat or range-bound")
+    except KeyError:
+        signals['On-Balance Volume (OBV)'] = ('Neutral', 'Error: Column not found.')
+
+    # --- Ichimoku Cloud Signal (Simplistic Cloud Position) ---
+    try:
+        span_a = df[next(col for col in df.columns if col.startswith('ISA_'))].iloc[-1]
+        span_b = df[next(col for col in df.columns if col.startswith('ISB_'))].iloc[-1]
+        
+        # Determine the cloud top and bottom
+        cloud_top = max(span_a, span_b)
+        cloud_bottom = min(span_a, span_b)
+        
+        if close > cloud_top:
+            signals['Ichimoku Cloud'] = ('Bullish', f"Price above Kumo Cloud ({close:.2f})")
+        elif close < cloud_bottom:
+            signals['Ichimoku Cloud'] = ('Bearish', f"Price below Kumo Cloud ({close:.2f})")
+        else:
+            signals['Ichimoku Cloud'] = ('Neutral', f"Price inside Kumo Cloud ({close:.2f})")
+
+    except (KeyError, StopIteration):
+        signals['Ichimoku Cloud'] = ('Neutral', 'Error: Column not found.')
+
     return signals
 
 
@@ -240,11 +307,12 @@ def fetch_btc_data():
         btc_data = result_pairs.get(pair_key)
         
         price = float(btc_data['c'][0])
-        volume = float(btc_data['v'][1])
+        # Volume is in the base asset (XBT)
+        volume_xbt = float(btc_data['v'][1]) 
         open_price = float(btc_data['o'])
         change_percent = ((price - open_price) / open_price) * 100 if open_price else 0
         
-        return price, volume, change_percent
+        return price, volume_xbt, change_percent
     except Exception as e:
         st.error(f"Could not fetch live Bitcoin data from Kraken: {e}")
         return None, None, None
@@ -374,19 +442,19 @@ st.markdown("Live data pulled from **Kraken API**. Health monitored with **expon
 
 # --- 0. Live Bitcoin Tracking ---
 st.header("0. Live Bitcoin Metrics (Kraken API)")
-btc_price, btc_volume, btc_change = fetch_btc_data()
+btc_price, btc_volume_xbt, btc_change = fetch_btc_data()
 
 if btc_price is not None:
     
     col_price, col_24h_change, col_volume = st.columns(3)
     
-    # Format volume for readability
-    if btc_volume >= 1_000_000_000:
-        volume_str = f"${btc_volume / 1_000_000_000:,.2f}B"
-    elif btc_volume >= 1_000_000:
-        volume_str = f"${btc_volume / 1_000_000:,.2f}M"
+    # Format volume for readability (XBT)
+    if btc_volume_xbt >= 1_000_000:
+        volume_str = f"{btc_volume_xbt / 1_000_000:,.2f}M"
+    elif btc_volume_xbt >= 1_000:
+        volume_str = f"{btc_volume_xbt / 1_000:,.2f}K"
     else:
-        volume_str = f"${btc_volume:,.0f}"
+        volume_str = f"{btc_volume_xbt:,.0f}"
 
     btc_change_str = f"{btc_change:+.2f}%"
 
@@ -402,8 +470,9 @@ if btc_price is not None:
         delta_color="normal"
     )
 
+    # FIX: Correct unit display for volume
     col_volume.metric(
-        label="24h Volume (BTC)", 
+        label="24h Volume (XBT)", 
         value=volume_str,
     )
     
@@ -432,7 +501,7 @@ with st.sidebar:
     # User control for number of bars (Count)
     selected_bar_count = st.slider(
         "Number of Historical Bars",
-        min_value=50,
+        min_value=52, # Minimum needed for Ichimoku
         max_value=1000,
         value=300,
         step=50
@@ -444,7 +513,7 @@ st.button("Run All Health Checks Now", on_click=run_all_checks, use_container_wi
 
 st.markdown("---")
 
-# --- 4. NEW: Automated TA Signals (Tiled Matrix) ---
+# --- 4. Automated TA Signals (Tiled Matrix) ---
 st.header(f"4. Automated TA Signal Matrix ({selected_timeframe_str})")
 st.markdown("Consolidated signals (Bullish/Bearish/Neutral) for rapid analysis.")
 
@@ -463,7 +532,10 @@ if ta_signals:
         'Neutral': '#6c757d'   # Grey
     }
     
-    for i, (indicator_name, (signal, detail)) in enumerate(ta_signals.items()):
+    # Sort signals alphabetically for consistent display
+    sorted_signals = sorted(ta_signals.items(), key=lambda item: item[0])
+
+    for i, (indicator_name, (signal, detail)) in enumerate(sorted_signals):
         
         # Determine the color and icon
         bg_color = color_map.get(signal, '#6c757d')
@@ -501,7 +573,7 @@ st.header(f"3. Historical Chart View ({selected_timeframe_str} Bars)")
 
 if historical_df is not None and not historical_df.empty:
     
-    # Calculate indicators again if needed for charting (get_indicator_signal calculates them too, but this ensures a clean chart data)
+    # Calculate indicators again if needed for charting 
     ta_df = historical_df.copy()
     ta_df.ta.rsi(append=True)
     
@@ -536,10 +608,10 @@ if historical_df is not None and not historical_df.empty:
 
 
     with col_chart:
+        # Include RSI and Close for the visualization
         st.line_chart(ta_df[['Close', 'RSI_14']])
         st.caption("The chart remains for visual confirmation of price and momentum.")
     
-    # Removed the raw data expander since the focus is on the signals
 else:
     st.warning(f"Could not load historical data for the selected parameters: {selected_timeframe_str}, {selected_bar_count} bars.")
 
